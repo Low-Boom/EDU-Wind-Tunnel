@@ -19,9 +19,11 @@ An updatead version of the test section or an additional component between the i
             - The now depracated but still available [AC InfinityCLOUDLINE S8 Pro](https://a.co/d/iekl0lr) is an equivalent option
 - Four Pin PWM Fan Cable such as the [Noctua NA-SEC1](https://www.noctua.at/en/products/na-sec1)
 - 1/16 in (0.063in) OD steel tubing for static pressure taps
+- 
        - [McMaster 304 Stainless Steel Tubing Miniature, 0.065" OD, 0.009" Wall Thickness](https://www.mcmaster.com/5560K73-5560K731/)
        - [063 Scanivalve Stainless Steel Tubulations](https://scanivalve.com/products/pneumatic-connectors-and-tubing/stainless-steel-tubulations/)
        - [Amazon 304 Stainless Steel Capillary Tube, OD 1.5mm](https://a.co/d/c9E1Kos)
+  
 - 1/16in (0.063in) ID soft line silicone or polyurethane/Tygon tubing
 - Common jumper wiring, 3.3V supply for sensors
 
