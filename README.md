@@ -42,6 +42,21 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - BMP3XX barometric sensor (E.g. [Adafruit BMP390](https://www.adafruit.com/product/4816?srsltid=AfmBOoptmxxHVYD1jurp-CC4qjkaLOoQzmZeBuTtz28D0mF_Nyu4XSE9) )
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
 
+## 🔧 Hardware Setup
+
+See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specifications.
+
+**Quick Connections:**
+```
+Arduino Pin 9   → PWM Control Signal
+Arduino Pin 2   → PWM Tachometer Feedback Signal (optional)
+I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
+```
+
+⚠️ Motor power supply must be separate from Arduino! This is 120V AC Power for the AC Infinity Fan or a 12V power supply for the 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
+
+---
+
 ### Installation
 
 1. **Install Arduino IDE**
@@ -70,22 +85,13 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 
 5. **Open Serial Monitor**
    - Set baud rate: **115200**
-   - Watch initialization messages
+   - Watch initialization messages to confirm successful hardware setup. 
 
----
-
-## 🔧 Hardware Setup
-
-See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specifications.
-
-**Quick Connections:**
-```
-Arduino Pin 9   → PWM Control Signal
-Arduino Pin 2   → PWM Tachometer Feedback Signal (optional)
-I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
-```
-
-⚠️ Motor power supply must be separate from Arduino! This is 120V AC Power for the AC Infinity Fan or a 12V power supply for the 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
+6. **Allow for Initial Calibration"
+   - Once the fan is under control, it will ramp down to 0.
+   - A default wait time of 30 seconds is set to allow for the airflow in the tunnel to fully stop
+   - 50 Samples are taken from the airspeed sensor to establish a zero offset.
+   - This routine can be re-run via the `recal` serial command later
 
 ---
 
