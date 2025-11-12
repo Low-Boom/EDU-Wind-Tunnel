@@ -10,14 +10,14 @@
 #include "math.h"
 
 // MBED support
-#include "mbed.h"
+// #include "mbed.h"
 
 #define SEALEVELPRESSURE_HPA (1013.25)
 #define DPS_ADDRESS 0x28
 #define BMP_I2C_ADDRESS 0x77
 
 // PID gains - Full PID control
-float Kp = 31.0, Ki = 12.0, Kd = 10.0;
+float Kp = 5.0, Ki = 1.0, Kd = 1.0;
 
 // Pin assignments
 const int PWM_pin = 9;    // Motor PWM control output
