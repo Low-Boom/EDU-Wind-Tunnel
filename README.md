@@ -1,4 +1,4 @@
-# Serial Controlled Educational Wind Tunnel Controller v1.0
+# Serial-Interface Educational Wind Tunnel Controller
 
 **PID-based airspeed and PWM fan based controller for educational wind tunnel systems**
 
