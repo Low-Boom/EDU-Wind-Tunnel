@@ -1,6 +1,6 @@
 # Advanced PID Tuning Guide
 
-**Master PID tuning for optimal wind tunnel performance**
+**Recommendations from Claude Sonnet 4.5 on PID tuning for this repository. The content is determined to be suitably accurate by the author, but take all AI generated content with skepticism and critical thinking.**
 
 **Version:** 1.0 (Stable)  
 **Last Updated:** 2025-11-09  
@@ -266,10 +266,3 @@ Tune → Test → Observe → Adjust → Repeat
 ```
 tune 20 8 12    # Good starting point for most systems
 ```
-
----
-
-**Version 1.0 - Production Ready**  
-**Last Updated:** 2025-11-09  
-**Author:** Low-Boom  
-**Repository:** [EDU-wind-tunnel](https://github.com/Low-Boom/EDU-wind-tunnel)
