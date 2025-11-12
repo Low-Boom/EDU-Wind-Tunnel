@@ -1,5 +1,5 @@
 # Serial-Interface Educational Wind Tunnel Controller
-**Airspeed and PWM fan based controller for educational wind tunnel systems**
+**Arduino-based PID controller for educational wind tunnel systems**
 
 Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon
 
