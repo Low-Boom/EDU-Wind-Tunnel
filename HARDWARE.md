@@ -1,6 +1,6 @@
 # Hardware Configuration Guide
 
-**Detailed hardware setup for Wind Tunnel Controller v1.0**
+**Detailed hardware setup for Serial Wind Tunnel Controller**
 
 **Version:** 1.0 (Stable)  
 **Last Updated:** 2025-11-09  
@@ -8,4 +8,4 @@
 **Repository:** [EDU-wind-tunnel](https://github.com/Low-Boom/EDU-wind-tunnel)
 
 ---
-(rest of content remains the same)
+This area is under construction. Check back later.
