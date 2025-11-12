@@ -22,7 +22,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 ### Sensor Processing
 - **5x Pressure Oversampling** (noise reduction)
-- **Configurable Averaging** (1-50 samples, default 20)
+- **Configurable Airspeed Averaging** ( default 20)
 - **Temperature Compensation** (automatic air density correction)
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration)
 
