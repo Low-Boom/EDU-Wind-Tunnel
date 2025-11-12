@@ -95,37 +95,111 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 
 ---
 
-## Serial Command Control Usage
+## User-configurable variables (runtime & compile-time)
 
-### Setting Target Airspeed
-```
-##              # Set the target airpseed by inputting a number. Default acceptable range is 0 - 25 m/s
-10              # e.g. Set target to 10 m/s
-15.5            # e.g, Set target to 15.5 m/s
-0               # e.g. Stop motor
-```
+This section documents the most useful user-configurable parameters that affect sensor averaging, control responsiveness, and tuning. Some variables can be changed at runtime via the serial console; others require editing the sketch and re-uploading.
 
-### Auto-Tuning (Recommended)
-```
-tune LOW HIGH     # Auto-tune with by relaying between set PWM values targeting the current set airspeed.
-tune 40 100       # e.g. bounce between PWM level 40 and PWM level 100.
-```
-Target airspeed must be set greater than 2 m/s prior to invokingthis command.
-This might take some experimentation to find levels around your target airspeed.
-Wait 30-60 seconds for completion.
+---
+### Runtime-adjustable (via serial commands)
+These can be changed while the system is running; they take effect immediately.
 
-### Manual PID Tuning
-```
-tune Kp Ki Kd    # Manually set PID controller paramters.
-tune 20 8 12     # e.g. set Kp=20, Ki=8, Kd=12
-```
+- `avg <N>`
+  - Purpose: Set pressure averaging window (number of averaged samples).
+  - Command: `avg 1` .. `avg 50`
+  - Default: 20
+  - Effect: Lower values reduce lag and increase responsiveness (but increase noise). Higher values smooth readings and increase lag.
+  - Recommended: 1–5 for fast tuning/tests, 15–30 for stable operation/bench testing.
 
-### Recalibration
-```
-recal           # Recalibrate or zero the differential pressure sensor for airspeed 
-```
-⚠️ Motor must bet turned off or the differential pressure sensor disconnected from the test secion such that both sides see atmospheric pressure. 
-Expected precision of the MS4525DO is only +-0.5 m/s so keep your expectations in check on precision, especially if you are using a 12V fan. This offers a decent compromise between sensor cost, ease of integration, and accuracy.
+- `tune` / `tune <low> <high>` / `tune <Kp> <Ki> <Kd>`
+  - Purpose: Start auto relay tuning or set manual PID gains.
+  - Examples:
+    - `tune` — auto-estimate PWM range and run relay auto-tune.
+    - `tune 40 100` — run relay auto-tune using PWM 40..100.
+    - `tune 20 8 12` — directly set PID gains (Kp=20, Ki=8, Kd=12).
+  - Notes: Manual PID immediately applies and resets the PID controller.
+
+- `recal` / `recal <N>`
+  - Purpose: Re-run pressure sensor zero-offset calibration.
+  - ⚠️ Motor must bet fully off or sneor disconencted from the test section such that both sides of the sensor are exposed to atmosphere
+  - Default samples: 50 (unless overridden with `recal N`)
+  - Use when the tunnel has changed or after moving sensors.
+
+- Direct setpoint (number)
+  - Type a number (e.g., `10`) to set the target airspeed (m/s).
+
+---
+
+### Compile-time constants (edit in the sketch)
+These are top-of-file constants in `Giga_Tunnel_PID.ino`. After editing, re-upload the sketch.
+
+Important section: near the top of `Giga_Tunnel_PID.ino` (search for the comment block "sTune Auto-tuning configuration" or the constants block).
+
+Key variables (name → default → recommended range / notes):
+
+- `const int PRESSURE_OVERSAMPLES = 5;`
+  - Default: 5
+  - Purpose: How many raw pressure readings are taken and averaged per measurement (oversampling).
+  - Notes: Larger = less noise at sensor-read level; increases sampling time. Keep small (3–8).
+
+- `int pressureAverageSamples = 20;`
+  - Default: 20
+  - Purpose: Number of recent measurements averaged for output smoothing.
+  - Range: 1–50
+  - Notes: Controls effective system lag: effective lag ≈ updateInterval × pressureAverageSamples.
+
+- `const unsigned long updateInterval = 200;`
+  - Default: 200 ms (5 Hz)
+  - Purpose: Main loop sampling interval.
+  - Notes: Decreasing to 100 ms increases responsiveness but requires more CPU and may need QuickPID sample time adjustment.
+
+- `const float MAX_AIRSPEED = 28.0;`
+  - Default: 28 m/s
+  - Purpose: Upper bound for setpoint and emergency checks.
+  - Edit if your tunnel's maximum differs.
+
+- `int calibrationSamples = 50;`
+  - Default: 50
+  - Purpose: Number of samples used for zero-offset calibration.
+  - Notes: Increase (e.g., 100) for more stable offset at the cost of longer calibration.
+
+- `const float MAX_PWM_CHANGE_PER_CYCLE = 25.0;`
+  - Default: 25
+  - Purpose: Rate-limit PWM changes per control loop. Prevents sudden motor steps.
+  - Set higher for faster actuation, set to 255 to disable rate-limiting (not recommended).
+
+- `float relayHysteresis = 0.5;`
+  - Default: 0.5 m/s
+  - Purpose: Hysteresis band used by the relay auto-tuner to avoid chattering.
+  - Increase to reduce chattering if sensors are noisy.
+
+- `const int PWM_pin = 9;`
+  - Purpose: PWM output pin (change if your wiring differs).
+
+- `const float MIN_TUNE_SETPOINT = 2.0;`
+  - Default: 2.0 m/s
+  - Purpose: Minimum setpoint allowed for auto-tuning.
+
+- `const int REQUIRED_CYCLES = 3;`
+  - Default: 3
+  - Purpose: Number of relay oscillation cycles required to accept auto-tune results.
+
+- `const int PRESSURE_OVERSAMPLES` and `pressureAverageSamples` working note:
+  - Effective measurement latency ≈ updateInterval × pressureAverageSamples.
+  - For fast auto-tuning you may temporarily reduce `pressureAverageSamples` (for example, the code sets it to 3 during tuning). Use `avg 3` or change the constant and re-upload for persistent changes.
+
+---
+
+### How to edit these values in the code
+1. Open `Giga_Tunnel_PID.ino` in Arduino IDE.
+2. Near the top of the file you will find the constants and configuration block — edit the values prescribed above.
+3. If you change `updateInterval`, also update:
+   ```cpp
+   myPID.SetSampleTimeUs(updateInterval * 1000);
+   ```
+   (The code sets this value automatically from `updateInterval`).
+
+4. Save → Compile → Upload.
+
 ---
 
 ## 📖 Documentation
