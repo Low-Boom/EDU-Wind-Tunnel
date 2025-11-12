@@ -24,13 +24,7 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - **Configurable Averaging** (1-50 samples, default 20)
 - **Temperature Compensation** (automatic air density correction)
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration)
-
-### Advanced Features
-- P-on-Measurement (reduced overshoot)
-- D-on-Measurement (derivative kick elimination)
-- Conditional Anti-Windup (prevents integral saturation)
-- Real-time diagnostics and monitoring
-
+- 
 ---
 ## 📖 Detailed Documentation
 
