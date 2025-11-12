@@ -1,6 +1,6 @@
-# Wind Tunnel Controller v1.0
+# Serial Controlled Educational Wind Tunnel Controller v1.0
 
-**Comprehensive PID-based airspeed controller for educational wind tunnel systems**
+**PID-based airspeed and PWM fan based controller for educational wind tunnel systems**
 
 [![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://www.arduino.cc/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -8,12 +8,14 @@
 [![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
 
 ---
+Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (https://www.printables.com/model/849713-modular-wind-tunnel-for-stem-education)
+
 
 ## 🌟 Features
 
 ### Control & Tuning
 - **Full PID Control** (Proportional, Integral, Derivative)
-- **Relay Auto-Tuning** (Åström-Hägglund method with aggressive tuning rules)
+- **Relay Auto-Tuning** (Åström-Hägglund method)
 - **Manual PID Tuning** (direct gain adjustment)
 - **PWM Rate Limiting** (smooth motor transitions)
 
@@ -34,11 +36,11 @@
 ## 📋 Quick Start
 
 ### Prerequisites
-- Arduino Giga R1 WiFi board
-- MS4525DO differential pressure sensor
-- BMP3XX barometric sensor (BMP388 or BMP390)
-- PWM-controlled motor/ESC
 - Arduino IDE 2.0+
+- Any Arduino mbed compatible board (Tested on Arduino Giga R1 WiFi board)
+- Pitot-Static Airspeed Sensor based on a MS4525DO Differential pressure sensor (e.g. [Pixhawk PX4 Flight Controller Comaptible](https://a.co/d/9VPEeWh) )
+- BMP3XX barometric sensor (E.g. [Adafruit BMP390](https://www.adafruit.com/product/4816?srsltid=AfmBOoptmxxHVYD1jurp-CC4qjkaLOoQzmZeBuTtz28D0mF_Nyu4XSE9) )
+- PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
 
 ### Installation
 
@@ -49,7 +51,7 @@
 
 2. **Install Board Support**
    - Open: Tools → Board → Boards Manager
-   - Search: "Arduino Mbed OS Giga Boards"
+   - Search: "Arduino Mbed OS Giga Boards" (Or your Mbed board of choice)
    - Install latest version
 
 3. **Install Required Libraries**
@@ -62,7 +64,7 @@
 
 4. **Upload Code**
    - Open `Giga_Tunnel_PID.ino`
-   - Select Board: "Arduino Giga R1"
+   - Select Board: "Arduino Giga R1" (Or your Mbed board of choice)
    - Select Port: Your Arduino's COM port
    - Click Upload
 
@@ -78,40 +80,41 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
 
 **Quick Connections:**
 ```
-Arduino Pin 9   → ESC PWM Signal
-Arduino Pin 2   → Tachometer (optional)
-I2C (SDA/SCL)   → MS4525DO + BMP3XX
+Arduino Pin 9   → PWM Control Signal
+Arduino Pin 2   → PWM Tachometer Feedback Signal (optional)
+I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 ```
 
-⚠️ **CRITICAL:** Motor power supply must be separate from Arduino!
+⚠️ **CRITICAL:** Motor power supply must be separate from Arduino! This is 120V AC Power for the AC Infinity Fan and a 12V power supply for a 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
 
 ---
 
-## 🚀 Basic Usage
+## Serial Command Control Usage
 
 ### Setting Target Airspeed
 ```
-10              # Set target to 10 m/s
-15.5            # Set target to 15.5 m/s
-0               # Stop motor
+##              # Set the target airpseed by inputting a number. Default acceptable range is 0 - 25 m/s
+10              # e.g. Set target to 10 m/s
+15.5            # e.g, Set target to 15.5 m/s
+0               # E.g. Stop motor
 ```
 
 ### Auto-Tuning (Recommended)
 ```
-tune 40 100     # Auto-tune with PWM range 40-100
+tune LOW HIGH     # Auto-tune with by relaying between set PWM values targeting the current set airspeed. E.g. "tune 40 100" to bounce between PWM level 40 and PWM level 100. This might take some experimentation to find levels around your target airspeed
 ```
 Wait 30-60 seconds for completion.
 
 ### Manual PID Tuning
 ```
-tune 20 8 12    # Set Kp=20, Ki=8, Kd=12
+tune Kp Ki Kd    # Manually set PID controller paramters. E.g. "tune 20 8 12" to set Kp=20, Ki=8, Kd=12
 ```
 
 ### Recalibration
 ```
-recal           # Recalibrate pressure sensor
+recal           # Recalibrate or zero the differential pressure sensor for airspeed 
 ```
-
+⚠️ **CRITICAL:** Motor must bet turned off or the differential pressure sensor disconnected from the test secion such that both sides see atmospheric pressure.
 ---
 
 ## 📖 Documentation
@@ -133,9 +136,9 @@ recal           # Recalibrate pressure sensor
 - **V**: Current airspeed (m/s)
 - **Target**: Setpoint (m/s)
 - **PWM**: Motor output (0-255)
-- **P**: Pressure (Pa)
+- **P**: Airspeed Sensor Differential Pressure (Pa)
 - **Temp**: Ambient temperature (°C)
-- **Err**: Control error
+- **Err**: PID Control Rrror
 
 ---
 
@@ -183,28 +186,6 @@ Uses controlled oscillation to determine:
 
 ---
 
-## 📝 Version History
-
-**v1.0** (2025-11-09) - **STABLE RELEASE**
-- Production-ready release
-- Relay auto-tuner with aggressive tuning rules
-- Manual PID setting via `tune Kp Ki Kd`
-- Comprehensive documentation
-- Proven performance in educational settings
-
-**v0.10.x** (Development versions)
-- Relay auto-tuner implementation
-- Åström-Hägglund method
-- PWM range specification
-- Debug and diagnostics
-
-**v0.9.x** (Beta versions)
-- Advanced sensor processing
-- Temperature compensation
-- Experimental auto-tuners
-
----
-
 ## 🤝 Contributing
 
 Contributions welcome! Please:
@@ -235,15 +216,10 @@ See individual library licenses for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - QuickPID Library by dlloydev
 - Adafruit for sensor libraries
 - Bolder Flight Systems for MS4525DO library
 - Arduino community for MBED support
-
----
-
-**Built for educational wind tunnel applications** 🌬️
-
-**Version 1.0 - Production Ready**
+- Jerrod H. for the Wind Tunnel Design
