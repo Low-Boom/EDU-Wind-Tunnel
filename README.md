@@ -24,7 +24,7 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - **Configurable Averaging** (1-50 samples, default 20)
 - **Temperature Compensation** (automatic air density correction)
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration)
-- 
+
 ---
 ## 📖 Detailed Documentation
 
