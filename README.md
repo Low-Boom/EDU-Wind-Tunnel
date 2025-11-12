@@ -32,6 +32,12 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - Real-time diagnostics and monitoring
 
 ---
+## 📖 Detailed Documentation
+
+- **[HARDWARE.md](HARDWARE.md)** - Detailed wiring, components, and power supply info
+- - **[TUNING_GUIDE.md](TUNING_GUIDE.md)** - Advanced PID tuning techniques
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues encountered during development and solutions
+---
 
 ## 📋 Quick Start
 
@@ -41,6 +47,7 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - Pitot-Static Airspeed Sensor based on a MS4525DO Differential pressure sensor (e.g. [Pixhawk PX4 Flight Controller Comaptible](https://a.co/d/9VPEeWh) )
 - BMP3XX barometric sensor (E.g. [Adafruit BMP390](https://www.adafruit.com/product/4816?srsltid=AfmBOoptmxxHVYD1jurp-CC4qjkaLOoQzmZeBuTtz28D0mF_Nyu4XSE9) )
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
+---
 
 ## 🔧 Hardware Setup
 
@@ -103,6 +110,9 @@ This section documents the most useful user-configurable parameters that affect 
 ### Runtime-adjustable (via serial commands)
 These can be changed while the system is running; they take effect immediately.
 
+- Direct setpoint (number)
+  - Type a number (e.g., `10`) to set the target airspeed (m/s).
+
 - `avg <N>`
   - Purpose: Set pressure averaging window (number of averaged samples).
   - Command: `avg 1` .. `avg 50`
@@ -123,10 +133,7 @@ These can be changed while the system is running; they take effect immediately.
   - ⚠️ Motor must bet fully off or sneor disconencted from the test section such that both sides of the sensor are exposed to atmosphere
   - Default samples: 50 (unless overridden with `recal N`)
   - Use when the tunnel has changed or after moving sensors.
-
-- Direct setpoint (number)
-  - Type a number (e.g., `10`) to set the target airspeed (m/s).
-
+  - 
 ---
 
 ### Compile-time constants (edit in the sketch)
@@ -199,14 +206,6 @@ Key variables (name → default → recommended range / notes):
    (The code sets this value automatically from `updateInterval`).
 
 4. Save → Compile → Upload.
-
----
-
-## 📖 Documentation
-
-- **[HARDWARE.md](HARDWARE.md)** - Detailed wiring, components, and power supply info
-- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
-- **[TUNING_GUIDE.md](TUNING_GUIDE.md)** - Advanced PID tuning techniques
 
 ---
 
