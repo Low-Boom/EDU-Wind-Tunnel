@@ -5,13 +5,14 @@ Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-E
 
 Debugging assitance provided by Antropic Claude Sonnet 4.5 and verified by humans.
 
+Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/)
+
 [![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://www.arduino.cc/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
 [![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
 
 ---
-Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/)
 
 
 ## Features
