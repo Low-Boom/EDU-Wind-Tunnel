@@ -102,132 +102,79 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 
 ---
 
-## User-configurable variables (runtime & compile-time)
+Basic serial commands
+- `<number>` — set target airspeed in m/s, e.g. `10`
+- `tune` — auto-estimate PWM range and run relay auto-tune
+- `tune <low> <high>` — run relay auto-tune with manual PWM range, e.g. `tune 40 100`
+- `tune <Kp> <Ki> <Kd>` — set PID gains immediately, e.g. `tune 20 8 12`
+- `recal` or `recal <N>` — recalibrate pressure sensor (N samples)
+- `avg <N>` — set pressure averaging window (1..50)
+- `0` — stop (set target 0), emergency stop
 
-This section documents the most useful user-configurable parameters that affect sensor averaging, control responsiveness, and tuning. Some variables can be changed at runtime via the serial console; others require editing the sketch and re-uploading.
+User-configurable variables (runtime & compile-time)
+This section documents runtime commands and the main compile-time constants. Use runtime commands for day-to-day tuning; edit the sketch and re-upload for persistent compile-time changes.
 
----
-### Runtime-adjustable (via serial commands)
-These can be changed while the system is running; they take effect immediately.
+Runtime (via serial)
+- `avg <N>`  
+  - Purpose: set pressure averaging samples (1–50). Default 20.  
+  - Effect: lower → faster but noisier; higher → smoother but more lag.  
+  - Typical: `avg 3` for fast tuning, `avg 15–30` for stable operation.
 
-- Direct setpoint (number)
-  - Type a number (e.g., `10`) to set the target airspeed (m/s).
+- `tune` / `tune <low> <high>` / `tune <Kp> <Ki> <Kd>`  
+  - `tune` : auto-estimate PWM band and run relay tuning.  
+  - `tune <low> <high>` : force PWM range (manual). Use when auto-estimate is poor.  
+  - `tune <Kp> <Ki> <Kd>` : manually apply PID gains; controller resets automatically.
 
-- `avg <N>`
-  - Purpose: Set pressure averaging window (number of averaged samples).
-  - Command: `avg 1` .. `avg 50`
-  - Default: 20
-  - Effect: Lower values reduce lag and increase responsiveness (but increase noise). Higher values smooth readings and increase lag.
-  - Recommended: 1–5 for fast tuning/tests, 15–30 for stable operation/bench testing.
+- `recal [N]`  
+  - Re-run zero-offset calibration. Default samples N = 50 if omitted.
 
-- `tune` / `tune <low> <high>` / `tune <Kp> <Ki> <Kd>`
-  - Purpose: Start auto relay tuning or set manual PID gains.
-  - Examples:
-    - `tune` — auto-estimate PWM range and run relay auto-tune.
-    - `tune 40 100` — run relay auto-tune using PWM 40..100.
-    - `tune 20 8 12` — directly set PID gains (Kp=20, Ki=8, Kd=12).
-  - Notes: Manual PID immediately applies and resets the PID controller.
+- Direct setpoint: type a number (m/s) to set target.
 
-- `recal` / `recal <N>`
-  - Purpose: Re-run pressure sensor zero-offset calibration.
-  - ⚠️ Motor must bet fully off or sneor disconencted from the test section such that both sides of the sensor are exposed to atmosphere
-  - Default samples: 50 (unless overridden with `recal N`)
-  - Use when the tunnel has changed or after moving sensors.
-  - 
----
+Compile-time (edit `Giga_Tunnel_PID.ino`)
+Open the sketch and edit the configuration block near the top:
 
-### Compile-time constants (edit in the sketch)
-These are top-of-file constants in `Giga_Tunnel_PID.ino`. After editing, re-upload the sketch.
+- `const int PRESSURE_OVERSAMPLES = 5;`  
+  - Oversampling per measurement (3–8 typical).
 
-Important section: near the top of `Giga_Tunnel_PID.ino` (search for the comment block "sTune Auto-tuning configuration" or the constants block).
+- `int pressureAverageSamples = 20;`  
+  - Averaging window for measurements (1–50). Effective lag ≈ updateInterval × pressureAverageSamples.
 
-Key variables (name → default → recommended range / notes):
+- `const unsigned long updateInterval = 200;`  
+  - Main loop period in ms (default 200 ms). If changed, QuickPID sample time will be set from this.
 
-- `const int PRESSURE_OVERSAMPLES = 5;`
-  - Default: 5
-  - Purpose: How many raw pressure readings are taken and averaged per measurement (oversampling).
-  - Notes: Larger = less noise at sensor-read level; increases sampling time. Keep small (3–8).
+- `int calibrationSamples = 50;`  
+  - Samples used for zero-offset calibration at startup/recal.
 
-- `int pressureAverageSamples = 20;`
-  - Default: 20
-  - Purpose: Number of recent measurements averaged for output smoothing.
-  - Range: 1–50
-  - Notes: Controls effective system lag: effective lag ≈ updateInterval × pressureAverageSamples.
+- `const float MAX_AIRSPEED = 28.0;`  
+  - Upper bound for setpoints; change if your tunnel differs.
 
-- `const unsigned long updateInterval = 200;`
-  - Default: 200 ms (5 Hz)
-  - Purpose: Main loop sampling interval.
-  - Notes: Decreasing to 100 ms increases responsiveness but requires more CPU and may need QuickPID sample time adjustment.
+- `const float MAX_PWM_CHANGE_PER_CYCLE = 25.0;`  
+  - PWM slew limit per update cycle; set to 255 to disable.
 
-- `const float MAX_AIRSPEED = 28.0;`
-  - Default: 28 m/s
-  - Purpose: Upper bound for setpoint and emergency checks.
-  - Edit if your tunnel's maximum differs.
+- `float relayHysteresis = 0.5;`  
+  - m/s hysteresis for relay auto-tune to prevent chattering.
 
-- `int calibrationSamples = 50;`
-  - Default: 50
-  - Purpose: Number of samples used for zero-offset calibration.
-  - Notes: Increase (e.g., 100) for more stable offset at the cost of longer calibration.
+- `const int PWM_pin = 9;` and `const int TACH_pin = 2;`  
+  - Pin assignments; change if wiring differs.
 
-- `const float MAX_PWM_CHANGE_PER_CYCLE = 25.0;`
-  - Default: 25
-  - Purpose: Rate-limit PWM changes per control loop. Prevents sudden motor steps.
-  - Set higher for faster actuation, set to 255 to disable rate-limiting (not recommended).
+- `const float MIN_TUNE_SETPOINT = 2.0;` and `const int REQUIRED_CYCLES = 3;`  
+  - Minimum auto-tune setpoint and cycles needed for a valid tune.
 
-- `float relayHysteresis = 0.5;`
-  - Default: 0.5 m/s
-  - Purpose: Hysteresis band used by the relay auto-tuner to avoid chattering.
-  - Increase to reduce chattering if sensors are noisy.
+Practical tips & tradeoffs
+- Responsiveness vs noise: reduce `pressureAverageSamples` and `PRESSURE_OVERSAMPLES` for speed (but expect noisier readings). Increase them to improve smoothing at the cost of slower control.
+- Auto-tune: if it times out or yields weak gains, try `avg 3` then `tune <low> <high>` with a narrower PWM delta (delta ≈ 50–80 recommended).
+- Safety: when increasing PWM slew or decreasing averaging, test at low setpoints first.
 
-- `const int PWM_pin = 9;`
-  - Purpose: PWM output pin (change if your wiring differs).
-
-- `const float MIN_TUNE_SETPOINT = 2.0;`
-  - Default: 2.0 m/s
-  - Purpose: Minimum setpoint allowed for auto-tuning.
-
-- `const int REQUIRED_CYCLES = 3;`
-  - Default: 3
-  - Purpose: Number of relay oscillation cycles required to accept auto-tune results.
-
-- `const int PRESSURE_OVERSAMPLES` and `pressureAverageSamples` working note:
-  - Effective measurement latency ≈ updateInterval × pressureAverageSamples.
-  - For fast auto-tuning you may temporarily reduce `pressureAverageSamples` (for example, the code sets it to 3 during tuning). Use `avg 3` or change the constant and re-upload for persistent changes.
-
----
-
-### How to edit these values in the code
-1. Open `Giga_Tunnel_PID.ino` in Arduino IDE.
-2. Near the top of the file you will find the constants and configuration block — edit the values prescribed above.
-3. If you change `updateInterval`, also update:
-   ```cpp
-   myPID.SetSampleTimeUs(updateInterval * 1000);
-   ```
-   (The code sets this value automatically from `updateInterval`).
-
-4. Save → Compile → Upload.
-
----
-
-## 📊 Data Output
-
+Data output format
+Example line printed periodically:
 ```
 123s | V:10.23 | T:10.00 | PWM:127 | P:61.45 | T:24.5°C | Err:-0.23
 ```
-
-**Fields:**
-- **T**: Time (s)
-- **V**: Current airspeed (m/s)
-- **Target**: Setpoint (m/s)
-- **PWM**: Motor output (0-255)
-- **P**: Airspeed Sensor Differential Pressure (Pa)
-- **Temp**: Ambient temperature (°C)
-- **Err**: PID Control Rrror
-
+Fields: elapsed time | airspeed (m/s) | target (m/s) | PWM (0–255) | differential pressure (Pa) | ambient temp (°C) | error (m/s)
 These can be quickly plotted using the Arduino IDE Serial Plotter or logged for later processing in a .csv format.
 ---
 
-## 🎯 Command Reference
+## Quick Command Reference
 
 | Command | Description | Example |
 |---------|-------------|---------|
