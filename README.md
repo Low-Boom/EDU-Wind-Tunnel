@@ -35,7 +35,7 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 ## 📖 Detailed Documentation
 
 - **[HARDWARE.md](HARDWARE.md)** - Detailed wiring, components, and power supply info
-- - **[TUNING_GUIDE.md](TUNING_GUIDE.md)** - Advanced PID tuning techniques
+- **[TUNING_GUIDE.md](TUNING_GUIDE.md)** - Advanced PID tuning techniques
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues encountered during development and solutions
 ---
 
