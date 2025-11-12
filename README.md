@@ -198,9 +198,6 @@ This is an initial release so the documentation and best practices are still evo
 
 - **Issues**: [GitHub Issues](https://github.com/Low-Boom/EDU-wind-tunnel/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/Low-Boom/EDU-wind-tunnel/discussions)
-- **Author**: Low-Boom
-- **Release Date**: 2025-11-09
-- **Status**: Stable
 
 ---
 
