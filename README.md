@@ -26,7 +26,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 - **Temperature Compensation** (automatic air density correction)
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration)
 
-### Upcoming Features in Development (In Order of 
+### Upcoming Features in Development (Eventually) 
 - Serial free untethered control via Modulino controls and a screen for mobility
 - A Controllino PLC-based version for industrial applications and education
 - A [Mathworks Simulink](https://www.mathworks.com/products/simulink.html) and [Julia Hub DYAD](https://juliahub.com/products/dyad) compatible controller
