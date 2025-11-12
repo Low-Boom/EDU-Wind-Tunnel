@@ -1,7 +1,7 @@
 # Educational Wind Tunnel PID Controller
 **Arduino-based PID controller for educational wind tunnel systems**
 
-Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon
+Developed by [Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon
 
 Debugging assitance provided by Antropic Claude Sonnet 4.5 and verified by humans.
 
