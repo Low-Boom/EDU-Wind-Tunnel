@@ -11,7 +11,7 @@
 Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (https://www.printables.com/model/849713-modular-wind-tunnel-for-stem-education)
 
 
-## 🌟 Features
+## Features
 
 ### Control & Tuning
 - **Full PID Control** (Proportional, Integral, Derivative)
@@ -26,14 +26,14 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration)
 
 ---
-## 📖 Detailed Documentation
+## Detailed Documentation
 
 - **[HARDWARE.md](HARDWARE.md)** - Detailed wiring, components, and power supply info
 - **[TUNING_GUIDE.md](TUNING_GUIDE.md)** - Advanced PID tuning techniques
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues encountered during development and solutions
 ---
 
-## 📋 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Arduino IDE 2.0+
@@ -43,7 +43,7 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
 ---
 
-## 🔧 Hardware Setup
+## Hardware Setup
 
 See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specifications.
 
@@ -96,19 +96,22 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 
 ---
 
-Basic serial commands
-- `<number>` — set target airspeed in m/s, e.g. `10`
-- `tune` — auto-estimate PWM range and run relay auto-tune
-- `tune <low> <high>` — run relay auto-tune with manual PWM range, e.g. `tune 40 100`
-- `tune <Kp> <Ki> <Kd>` — set PID gains immediately, e.g. `tune 20 8 12`
-- `recal` or `recal <N>` — recalibrate pressure sensor (N samples)
-- `avg <N>` — set pressure averaging window (1..50)
-- `0` — stop (set target 0), emergency stop
+## Quick Command Reference
 
-User-configurable variables (runtime & compile-time)
-This section documents runtime commands and the main compile-time constants. Use runtime commands for day-to-day tuning; edit the sketch and re-upload for persistent compile-time changes.
+| Command | Description | Example |
+|---------|-------------|---------|
+| `<number>` | Set target airspeed | `10` |
+| `tune` | Auto-tune (auto PWM) | `tune` |
+| `tune <L> <H>` | Auto-tune (manual PWM) | `tune 40 100` |
+| `tune <Kp> <Ki> <Kd>` | Manual PID | `tune 20 8 12` |
+| `recal` | Recalibrate sensor | `recal` |
+| `recal <N>` | Recalibrate (N samples) | `recal 100` |
+| `avg <N>` | Set averaging | `avg 10` |
 
-Runtime (via serial)
+## User-configurable variables (runtime & compile-time) 
+
+### Runtime Commands (via serial)
+- Direct setpoint: type a number (m/s) to set target.
 - `avg <N>`  
   - Purpose: set pressure averaging samples (1–50). Default 20.  
   - Effect: lower → faster but noisier; higher → smoother but more lag.  
@@ -119,12 +122,7 @@ Runtime (via serial)
   - `tune <low> <high>` : force PWM range (manual). Use when auto-estimate is poor.  
   - `tune <Kp> <Ki> <Kd>` : manually apply PID gains; controller resets automatically.
 
-- `recal [N]`  
-  - Re-run zero-offset calibration. Default samples N = 50 if omitted.
-
-- Direct setpoint: type a number (m/s) to set target.
-
-Compile-time (edit `Giga_Tunnel_PID.ino`)
+### Compile-time (edit `Giga_Tunnel_PID.ino`)
 Open the sketch and edit the configuration block near the top:
 
 - `const int PRESSURE_OVERSAMPLES = 5;`  
@@ -154,32 +152,14 @@ Open the sketch and edit the configuration block near the top:
 - `const float MIN_TUNE_SETPOINT = 2.0;` and `const int REQUIRED_CYCLES = 3;`  
   - Minimum auto-tune setpoint and cycles needed for a valid tune.
 
-Practical tips & tradeoffs
-- Responsiveness vs noise: reduce `pressureAverageSamples` and `PRESSURE_OVERSAMPLES` for speed (but expect noisier readings). Increase them to improve smoothing at the cost of slower control.
-- Auto-tune: if it times out or yields weak gains, try `avg 3` then `tune <low> <high>` with a narrower PWM delta (delta ≈ 50–80 recommended).
-- Safety: when increasing PWM slew or decreasing averaging, test at low setpoints first.
-
 Data output format
+These can be quickly plotted using the Arduino IDE Serial Plotter or logged for later processing in a .csv format.
 Example line printed periodically:
 ```
 123s | V:10.23 | T:10.00 | PWM:127 | P:61.45 | T:24.5°C | Err:-0.23
+
+elapsed time | airspeed (m/s) | target (m/s) | PWM (0–255) | differential pressure (Pa) | ambient temp (°C) | error (m/s)
 ```
-Fields: elapsed time | airspeed (m/s) | target (m/s) | PWM (0–255) | differential pressure (Pa) | ambient temp (°C) | error (m/s)
-These can be quickly plotted using the Arduino IDE Serial Plotter or logged for later processing in a .csv format.
----
-
-## Quick Command Reference
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `<number>` | Set target airspeed | `10` |
-| `tune` | Auto-tune (auto PWM) | `tune` |
-| `tune <L> <H>` | Auto-tune (manual PWM) | `tune 40 100` |
-| `tune <Kp> <Ki> <Kd>` | Manual PID | `tune 20 8 12` |
-| `recal` | Recalibrate sensor | `recal` |
-| `recal <N>` | Recalibrate (N samples) | `recal 100` |
-| `avg <N>` | Set averaging | `avg 10` |
-
 ---
 
 ## ⚠️ Safety Warnings
@@ -189,27 +169,6 @@ These can be quickly plotted using the Arduino IDE Serial Plotter or logged for 
 3. **Testing**: Start with low speeds (2-5 m/s), gradually increase
 4. **Emergency**: Type `0` to stop, disconnect power if unstable
 
----
-
-## 🔬 Theory of Operation
-
-### PID Control Equation
-```
-PWM = Kp × e(t) + Ki × ∫e(t)dt + Kd × de(t)/dt
-```
-
-### Airspeed Calculation (Bernoulli)
-```
-V = √(2ΔP / ρ)
-```
-Where ρ is temperature-compensated air density.
-
-### Relay Auto-Tuning
-Uses controlled oscillation to determine:
-- Ultimate gain (Ku)
-- Ultimate period (Tu)
-- Applies "Some Overshoot" tuning rules for fast response
-- 
 ---
 
 ## 📄 License
@@ -224,7 +183,7 @@ See individual library licenses for details.
 
 ---
 
-## 📧 Support
+## Support
 This code is provided with no warranty or expectation of support. If you post something in the issues or discussion sections of GitHub I or another community member may be able to resolve your question. 
 This is an initial release so the documentation and best practices are still evolving. If you have contributions, such as improved PID tuning or support for different hardware, please fork, tweak, pull, and merge at your discretion.
 
