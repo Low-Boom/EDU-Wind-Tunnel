@@ -1,4 +1,4 @@
-# Serial-Interface Educational Wind Tunnel Controller
+# ducational Wind Tunnel PID Controller
 **Arduino-based PID controller for educational wind tunnel systems**
 
 Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon
@@ -9,7 +9,7 @@ Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-E
 [![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
 
 ---
-Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (https://www.printables.com/model/849713-modular-wind-tunnel-for-stem-education)
+Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod H.](https://jerrod.hofferth.net/)
 
 
 ## Features
@@ -25,6 +25,12 @@ Developed for use with the Modular Wind Tunnel for STEM Education by Jerrod H. (
 - **Configurable Averaging** (1-50 samples, default 20)
 - **Temperature Compensation** (automatic air density correction)
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration)
+
+### Upcoming Features in Development (In Order of 
+- Serial free untethered control via Modulino controls and a screen for mobility
+- A Controllino PLC-based version for industrial applications and education
+- A [Mathworks Simulink](https://www.mathworks.com/products/simulink.html) and [Julia Hub DYAD](https://juliahub.com/products/dyad) compatible controller
+- Coursework materials for wind tunnel operation an design
 
 ---
 ## Detailed Documentation
