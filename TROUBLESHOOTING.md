@@ -1,6 +1,4 @@
-# Troubleshooting — v1.0
-
-Fixes for common problems encountered during development.
+# Troubleshooting
 
 ---
 
