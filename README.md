@@ -1,7 +1,7 @@
 # Educational Wind Tunnel PID Controller
 **Arduino-based PID controller for educational wind tunnel systems**
 
-Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon
+Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman), [Dr. Jerrod Hofferth](https://jerrod.hofferth.net/), and Olivia Coulon
 
 [![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://www.arduino.cc/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -9,7 +9,7 @@ Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-E
 [![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
 
 ---
-Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod H.](https://jerrod.hofferth.net/)
+Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/)
 
 
 ## Features
