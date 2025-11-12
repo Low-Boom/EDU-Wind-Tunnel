@@ -23,10 +23,10 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 - **PWM Rate Limiting** (smooth motor transitions)
 
 ### Sensor Processing
-- **5x Pressure Oversampling** (noise reduction)
-- **Configurable Airspeed Averaging** ( default 20)
-- **Temperature Compensation** (automatic air density correction)
-- **Zero-Offset Calibration** (automatic at startup, manual recalibration)
+- **Pressure Oversampling** (noise reduction)
+- **Configurable Airspeed Averaging** (default 20)
+- **Ambient Temperature Compensation** (automatic air density correction)
+- **Zero-Offset Calibration** (automatic at startup, manual recalibration at will)
 
 ### Upcoming Features in Development (Eventually) 
 - Serial free untethered control via Modulino controls and a screen for mobility
