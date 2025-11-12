@@ -85,7 +85,7 @@ Arduino Pin 2   → PWM Tachometer Feedback Signal (optional)
 I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 ```
 
-⚠️ **CRITICAL:** Motor power supply must be separate from Arduino! This is 120V AC Power for the AC Infinity Fan and a 12V power supply for a 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
+⚠️ Motor power supply must be separate from Arduino! This is 120V AC Power for the AC Infinity Fan or a 12V power supply for the 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
 
 ---
 
@@ -118,7 +118,8 @@ tune 20 8 12     # e.g. set Kp=20, Ki=8, Kd=12
 ```
 recal           # Recalibrate or zero the differential pressure sensor for airspeed 
 ```
-⚠️ **CRITICAL:** Motor must bet turned off or the differential pressure sensor disconnected from the test secion such that both sides see atmospheric pressure.
+⚠️ Motor must bet turned off or the differential pressure sensor disconnected from the test secion such that both sides see atmospheric pressure. 
+Expected precision of the MS4525DO is only +-0.5 m/s so keep your expectations in check on precision, especially if you are using a 12V fan. This offers a decent compromise between sensor cost, ease of integration, and accuracy.
 ---
 
 ## 📖 Documentation
@@ -205,7 +206,6 @@ See individual library licenses for details.
 
 ## 📧 Support
 This code is provided with no warranty or expectation of support. If you post something in the issues or discussion sections of GitHub I or another community member may be able to resolve your question. 
-
 This is an initial release so the documentation and best practices are still evolving. If you have contributions, such as improved PID tuning or support for different hardware, please fork, tweak, pull, and merge at your discretion.
 
 - **Issues**: [GitHub Issues](https://github.com/Low-Boom/EDU-wind-tunnel/issues)
