@@ -96,18 +96,22 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 ##              # Set the target airpseed by inputting a number. Default acceptable range is 0 - 25 m/s
 10              # e.g. Set target to 10 m/s
 15.5            # e.g, Set target to 15.5 m/s
-0               # E.g. Stop motor
+0               # e.g. Stop motor
 ```
 
 ### Auto-Tuning (Recommended)
 ```
-tune LOW HIGH     # Auto-tune with by relaying between set PWM values targeting the current set airspeed. E.g. "tune 40 100" to bounce between PWM level 40 and PWM level 100. This might take some experimentation to find levels around your target airspeed
+tune LOW HIGH     # Auto-tune with by relaying between set PWM values targeting the current set airspeed.
+tune 40 100       # e.g. bounce between PWM level 40 and PWM level 100.
 ```
+Target airspeed must be set greater than 2 m/s prior to invokingthis command.
+This might take some experimentation to find levels around your target airspeed.
 Wait 30-60 seconds for completion.
 
 ### Manual PID Tuning
 ```
-tune Kp Ki Kd    # Manually set PID controller paramters. E.g. "tune 20 8 12" to set Kp=20, Ki=8, Kd=12
+tune Kp Ki Kd    # Manually set PID controller paramters.
+tune 20 8 12     # e.g. set Kp=20, Ki=8, Kd=12
 ```
 
 ### Recalibration
@@ -140,6 +144,7 @@ recal           # Recalibrate or zero the differential pressure sensor for airsp
 - **Temp**: Ambient temperature (°C)
 - **Err**: PID Control Rrror
 
+These can be quickly plotted using the Arduino IDE Serial Plotter or logged for later processing in a .csv format.
 ---
 
 ## 🎯 Command Reference
@@ -183,19 +188,11 @@ Uses controlled oscillation to determine:
 - Ultimate gain (Ku)
 - Ultimate period (Tu)
 - Applies "Some Overshoot" tuning rules for fast response
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
-
+- 
 ---
 
 ## 📄 License
+Derived from the Modular Wind Tunnel for STEM Education by Jerrod H. under a Creative Commons4.0 License
 
 This project uses open-source libraries:
 - QuickPID (MIT License)
@@ -207,6 +204,9 @@ See individual library licenses for details.
 ---
 
 ## 📧 Support
+This code is provided with no warranty or expectation of support. If you post something in the issues or discussion sections of GitHub I or another community member may be able to resolve your question. 
+
+This is an initial release so the documentation and best practices are still evolving. If you have contributions, such as improved PID tuning or support for different hardware, please fork, tweak, pull, and merge at your discretion.
 
 - **Issues**: [GitHub Issues](https://github.com/Low-Boom/EDU-wind-tunnel/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/Low-Boom/EDU-wind-tunnel/discussions)
@@ -217,9 +217,8 @@ See individual library licenses for details.
 ---
 
 ## Acknowledgments
-
+- Jerrod H. for the Wind Tunnel Design
 - QuickPID Library by dlloydev
 - Adafruit for sensor libraries
 - Bolder Flight Systems for MS4525DO library
 - Arduino community for MBED support
-- Jerrod H. for the Wind Tunnel Design
