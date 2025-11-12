@@ -9,6 +9,7 @@ An updatead version of the test section or an additional component between the i
 - 3D Printed Educational Wind Tunnel with Static Pressure Ring
 - PWM Controlled Fan
 - Arduino Giga R1 WiFi (or compatible MBED-based board)
+     - Note that drivers for the Arduino Giga Display Shield are broken, do not bother buying one.
 - MS4525DO differential pressure sensor (I2C address 0x28)
 - BMP3XX barometric sensor (BMP388/BMP390) (I2C address 0x77 or 0x76)
 - PWM-capable motor or fan
