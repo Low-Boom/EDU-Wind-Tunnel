@@ -2,6 +2,7 @@
 **Arduino-based PID controller for educational wind tunnel systems**
 
 Developed by [Dr. Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman), [Dr. Jerrod Hofferth](https://jerrod.hofferth.net/), and Olivia Coulon
+Debugging Assitance Provided by Antropic Claude Sonnet 4.5
 
 [![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://www.arduino.cc/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
