@@ -53,6 +53,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 - Pitot-Static Airspeed Sensor based on a MS4525DO Differential pressure sensor (e.g. [Pixhawk PX4 Flight Controller Comaptible](https://a.co/d/9VPEeWh) )
 - BMP3XX barometric sensor (E.g. [Adafruit BMP390](https://www.adafruit.com/product/4816?srsltid=AfmBOoptmxxHVYD1jurp-CC4qjkaLOoQzmZeBuTtz28D0mF_Nyu4XSE9) )
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
+- Depending on board and fan combination, a [Bi-Directional Logic Level Lifter](https://www.adafruit.com/product/757?srsltid=AfmBOopBWeXgpfL63fDoCPbWWtu07TIO7QVbofNmTDtQ4QkU7BxYeCWk) with at least two channels
 ---
 
 ## Hardware Setup
