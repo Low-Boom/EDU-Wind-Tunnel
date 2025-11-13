@@ -7,7 +7,8 @@ Debugging assitance provided by Antropic Claude Sonnet 4.5 and verified by human
 
 Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/)
 
-[![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://www.arduino.cc/)
+[![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://store-usa.arduino.cc/products/giga-r1-wifi?srsltid=AfmBOop3Aqtaf3BpQPH1OCf3aJT8Pt39YOuv7pEPDY4g7xi1-DEwiopE)
+[![Arduino](https://img.shields.io/badge/Arduino-Mega%202560%20R3-00979D?logo=arduino)](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOopk3fHnK26RSMwzgGKXDylUJ8HzUNyVYfBNoiiwnkMh62EVld_U)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
 [![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
@@ -29,8 +30,9 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 - **Ambient Temperature Compensation** (automatic air density correction)
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration at will)
 
-### Upcoming Features in Development (Eventually) 
+### Features in Development (Eventually) 
 - Serial free untethered control via Modulino controls and a screen for mobility
+- Improved PID Tuning Algorithm(s)
 - A Controllino PLC-based version for industrial applications and education
 - A [Mathworks Simulink](https://www.mathworks.com/products/simulink.html) and [Julia Hub DYAD](https://juliahub.com/products/dyad) compatible controller
 - Coursework materials for wind tunnel operation an design
