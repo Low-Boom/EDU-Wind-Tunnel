@@ -17,7 +17,7 @@
 #define BMP_I2C_ADDRESS 0x77
 
 // PID gains - Full PID control
-float Kp = 5.0, Ki = 1.0, Kd = 1.0;
+float Kp = 25.0, Ki = 10.0, Kd = 15.0;
 
 // Pin assignments
 const int PWM_pin = 9;    // Motor PWM control output
@@ -28,7 +28,7 @@ const float kI = 1;
 const int MAX_PRESSURE = 14745.0;
 const float MIN_PRESSURE = 1638.0;
 
-const float MAX_AIRSPEED = 28.0;
+const float MAX_AIRSPEED = 30.0;
 const float MIN_AIRSPEED = 0.0;
 const float Specific_gas_constant = 287.058;
 
@@ -350,7 +350,7 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     savedAverageSamples = pressureAverageSamples;
     
     // REDUCE AVERAGING FOR FASTER TUNING RESPONSE
-    setPressureAverageSamples(3);  // Keep some averaging for noise reduction
+    // setPressureAverageSamples(3);  // Keep some averaging for noise reduction
     
     Serial.println("\n=====================================");
     Serial.println("[RELAY TUNE] AUTO-TUNE STARTING");
@@ -360,8 +360,8 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     Serial.println(" m/s");
     Serial.println("[RELAY] Method: Åström-Hägglund Relay");
     Serial.println("[RELAY] Tuning Rules: AGGRESSIVE (Some Overshoot)");
-    Serial.print("[RELAY] Averaging temporarily set to 3 (was ");
-    Serial.print(savedAverageSamples);
+    // Serial.print("[RELAY] Averaging temporarily set to 3 (was ");
+    // Serial.print(savedAverageSamples);
     Serial.println(")");
     
     // Calculate relay outputs
@@ -379,11 +379,9 @@ void startRelayTune(int pwmLow, int pwmHigh) {
         
         Serial.println("[RELAY] PWM Range: MANUAL");
     } else {
-        // Auto-calculate based on rough estimation
-        // More conservative: ~8 PWM per m/s
-        float estimatedPWM = desiredAirSpeed * 8;
-        relayOutputHigh = constrain(estimatedPWM + 20, 40, 150);
-        relayOutputLow = constrain(estimatedPWM - 20, 20, 120);
+        float estimatedPWM = desiredAirSpeed * 8; // Ball park sensitivity
+        relayOutputHigh = constrain(round(estimatedPWM) + 20, 40, 245);
+        relayOutputLow = constrain(round(estimatedPWM) - 20, 20, 150);
         
         Serial.println("[RELAY] PWM Range: AUTO-ESTIMATED");
         Serial.println("        Tip: If tuning fails, try manual range");
@@ -404,14 +402,6 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     Serial.println("        Duration: ~30-60 seconds");
     Serial.println("=====================================");
     
-    // CRITICAL: Ensure motor is stopped first
-    Serial.println("[RELAY] Stopping motor...");
-    currPWM = 0;
-    analogWrite(PWM_pin, 0);
-    delay(1000);  // Wait 1 second for motor to fully stop
-    
-    Serial.println("[RELAY] Motor stopped.");
-    
     // Initialize relay tuning state
     tuneSetpoint = desiredAirSpeed;
     tuneStartTime = millis();
@@ -425,22 +415,15 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     sumAmplitudes = 0;
     validCycles = 0;
     
-    // Set PWM to HIGH and start
-    currPWM = relayOutputHigh;
-    
-    Serial.print("[RELAY] Setting PWM to HIGH = ");
-    Serial.println((int)relayOutputHigh);
-    Serial.print("[RELAY] Calling analogWrite("); Serial.print(PWM_pin);
-    Serial.print(", "); Serial.print((int)relayOutputHigh); Serial.println(")");
-    
-    analogWrite(PWM_pin, (int)relayOutputHigh);
-    
+    // Set PWM to LOW and start
+    relayState = RELAY_LOW;
+    currPWM = relayOutputLow;
+    analogWrite(PWM_pin, (int)relayOutputLow);
+    delay(500);
     // Verify it was written
     Serial.print("[RELAY] currPWM variable = ");
     Serial.println(currPWM, 1);
-    Serial.println("[RELAY] Tuning active!");
-    Serial.println("[RELAY] Motor should be spinning NOW");
-    Serial.println("[RELAY] If NOT spinning: check wiring/ESC/power\n");
+    Serial.println("[RELAY] Tuning active");
     
     autoTuning = true;
 }
@@ -527,28 +510,28 @@ void runRelayTune() {
         // AGGRESSIVE TUNING RULES - "Some Overshoot" method
         // Based on Tyreus-Luyben modified for faster response
         // More aggressive than conservative ZN rules
-        Kp = 0.45 * Ku / 0.9;  // ~0.50 * Ku (more aggressive than 0.6)
-        Ki = 0.54 * Ku / (2.2 * Tu);  // Faster integral action
-        Kd = 0.15 * Ku * Tu;  // Stronger derivative (2x standard)
+        // Kp = 0.45 * Ku / 0.9;  // ~0.50 * Ku (more aggressive than 0.6)
+        // Ki = 0.54 * Ku / (2.2 * Tu);  // Faster integral action
+        // Kd = 0.15 * Ku * Tu;  // Stronger derivative (2x standard)
         
         // Alternative calculation for comparison
-        float Kp_aggressive = 0.7 * Ku;  // Even more aggressive
-        float Ki_aggressive = 1.75 * Ku / Tu;
-        float Kd_aggressive = 0.15 * Ku * Tu;
+        Kp = 0.7 * Ku;  // Even more aggressive
+        Ki = 1.75 * Ku / Tu;
+        Kd = 0.15 * Ku * Tu;
         
         Serial.println("\n[RELAY] Tuning calculations:");
         Serial.print("  Standard (Some Overshoot): Kp="); Serial.print(Kp, 2);
         Serial.print(", Ki="); Serial.print(Ki, 2);
         Serial.print(", Kd="); Serial.println(Kd, 2);
-        Serial.print("  Extra Aggressive option: Kp="); Serial.print(Kp_aggressive, 2);
-        Serial.print(", Ki="); Serial.print(Ki_aggressive, 2);
-        Serial.print(", Kd="); Serial.println(Kd_aggressive, 2);
-        Serial.println("  Using: Some Overshoot (balanced aggressive)");
+        // Serial.print("  Extra Aggressive option: Kp="); Serial.print(Kp_aggressive, 2);
+        // Serial.print(", Ki="); Serial.print(Ki_aggressive, 2);
+        // Serial.print(", Kd="); Serial.println(Kd_aggressive, 2);
+        // Serial.println("  Using: Some Overshoot (balanced aggressive)");
         
-        // Apply bounds
-        Kp = constrain(Kp, 5.0, 100.0);
-        Ki = constrain(Ki, 1.0, 50.0);
-        Kd = constrain(Kd, 1.0, 50.0);
+        // Tuning Bounds
+        Kp = constrain(Kp, 10.0, 100.0);
+        Ki = constrain(Ki, 1.0, 10.0);
+        Kd = constrain(Kd, 1.0, 10.0);
         
         myPID.SetTunings(Kp, Ki, Kd);
         
@@ -658,10 +641,10 @@ void calibratePressureSensor(bool skipWait, int numSamples) {
     if (!skipWait) {
         Serial.println("        4. Let system settle for thermal stability");
         Serial.println("");
-        Serial.println("        Waiting 30 seconds...");
+        Serial.println("        Waiting 15 seconds...");
         Serial.println("=====================================");
         
-        for (int i = 30; i > 0; i--) {
+        for (int i = 15; i > 0; i--) {
             Serial.print("        ");
             if (i < 10) Serial.print(" ");
             Serial.print(i);
