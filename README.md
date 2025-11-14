@@ -33,7 +33,6 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 ### Features in Development (Eventually) 
 - Serial free untethered control via Modulino controls and a screen for mobility
-- Improved PID Tuning Algorithm(s)
 - A Controllino PLC-based version for industrial applications and education
 - A [Mathworks Simulink](https://www.mathworks.com/products/simulink.html) and [Julia Hub DYAD](https://juliahub.com/products/dyad) compatible controller
 - Coursework materials for wind tunnel operation an design
@@ -202,7 +201,7 @@ elapsed time | airspeed (m/s) | target (m/s) | PWM (0–255) | differential pres
 1. **Motor Power**: NEVER power motor from Arduino - use separate supply
 2. **Mechanical**: Secure all components, keep clear of fan during operation
 3. **Testing**: Start with low speeds (2-5 m/s), gradually increase
-4. **Emergency**: Type `0` to stop, disconnect power if unstable
+4. **Emergency**: Type `0` to stop or disconnect motor/fan from power
 
 ---
 
@@ -221,7 +220,7 @@ See individual library licenses for details.
 
 ## Support
 This code is provided with no warranty or expectation of support. If you post something in the issues or discussion sections of GitHub I or another community member may be able to resolve your question. 
-This is an initial release so the documentation and best practices are still evolving. If you have contributions, such as improved PID tuning or support for different hardware, please fork, tweak, pull, and merge at your discretion.
+This is an initial release so the documentation and best practices are still evolving. If you have contributions, please fork, tweak, pull, and merge at your discretion.
 
 - **Issues**: [GitHub Issues](https://github.com/Low-Boom/EDU-wind-tunnel/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/Low-Boom/EDU-wind-tunnel/discussions)
@@ -230,7 +229,8 @@ This is an initial release so the documentation and best practices are still evo
 
 ## Acknowledgments
 - Jerrod H. for the Wind Tunnel Design
-- QuickPID Library by dlloydev
+- QuickPID Library by Dlloydev
+- sTune Library by Dlloydev
 - Adafruit for sensor libraries
 - Bolder Flight Systems for MS4525DO library
 - Arduino community for MBED support
