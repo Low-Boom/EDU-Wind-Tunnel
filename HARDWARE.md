@@ -12,8 +12,8 @@ An updatead version of the test section or an additional component between the i
           - Note that there are several quirks with the Giga that differ from almost every other Arduino board.
           - Furthermore, the display drivers are very bugged so don't buy a Giga Display Shield and expect it to work.
           - Because of these things, future versions will depracate the Giga, possibly replacing it with alternatives in addition to the Mega. 
-- 3D Printed Educational Wind Tunnel with Static Pressure Ring
-- Static Pressure Manifold
+- [3D Printed Educational Wind Tunnel with Static Pressure Ring](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
+- [Static Pressure Manifold](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
      - 3D Printed Manifold for 4x 0.063in (1/16in) to 1x 0..125in (1/8in) tubing
      - [Scanivalve Pneumatic Manifolds](https://scanivalve.com/products/pneumatic-connectors-and-tubing/pneumatic-manifolds/)
 - PWM Controlled Fan or Blower
