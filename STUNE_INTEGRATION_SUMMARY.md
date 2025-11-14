@@ -18,7 +18,7 @@ This repository now includes integration with the sTune library for advanced PID
 
 1. `Giga_Tunnel_PID/STunePIDTuner.h` - Wrapper interface (136 lines)
 2. `Giga_Tunnel_PID/STunePIDTuner.cpp` - Wrapper implementation (237 lines)
-3. `Giga_Tunnel_PID/sTune_WindTunnel_Example.ino` - Example sketch (260 lines)
+3. `examples/sTune_WindTunnel_Example/sTune_WindTunnel_Example.ino` - Example sketch (260 lines)
 4. `THIRD_PARTY_LICENSES.md` - License attribution (64 lines)
 5. `STUNE_TESTING.md` - Testing and validation guide (199 lines)
 6. `AUTOTUNING_COMPARISON.md` - Method comparison guide (341 lines)
@@ -154,7 +154,7 @@ If sTune library is not installed:
 
 1. **STunePIDTuner.h**: Interface documentation
 2. **STunePIDTuner.cpp**: Implementation comments
-3. **sTune_WindTunnel_Example.ino**: Usage example
+3. **examples/sTune_WindTunnel_Example/sTune_WindTunnel_Example.ino**: Usage example
 4. **THIRD_PARTY_LICENSES.md**: License information
 
 ## Testing

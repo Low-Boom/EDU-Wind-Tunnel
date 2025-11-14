@@ -42,7 +42,7 @@ Global variables use XXXXX bytes (XX%) of dynamic memory.
 
 ### Step 3: Verify Example Sketch Compiles
 
-1. Open `Giga_Tunnel_PID/sTune_WindTunnel_Example.ino`
+1. Open `examples/sTune_WindTunnel_Example/sTune_WindTunnel_Example.ino`
 2. Verify compilation succeeds
 
 ## Functional Testing (With Hardware)
@@ -116,7 +116,7 @@ Review the following to ensure integration is correct:
 
 ### Validation 2: Example Sketch
 
-The example sketch `sTune_WindTunnel_Example.ino` demonstrates:
+The example sketch `examples/sTune_WindTunnel_Example/sTune_WindTunnel_Example.ino` demonstrates:
 - Proper sTune initialization
 - Correct state machine handling
 - Error handling for timeout/failure
@@ -194,6 +194,6 @@ The system should handle errors gracefully:
 ## Reference
 
 - Main sketch: `Giga_Tunnel_PID/Giga_Tunnel_PID.ino`
-- Example: `Giga_Tunnel_PID/sTune_WindTunnel_Example.ino`
+- Example: `examples/sTune_WindTunnel_Example/sTune_WindTunnel_Example.ino`
 - Wrapper: `Giga_Tunnel_PID/STunePIDTuner.h/cpp`
 - Documentation: `TUNING_GUIDE.md`
