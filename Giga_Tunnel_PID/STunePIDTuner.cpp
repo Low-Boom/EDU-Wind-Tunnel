@@ -9,7 +9,7 @@
 
 #include "STunePIDTuner.h"
 
-STunePIDTuner::STunePIDTuner(float *input, float *output)
+STunePIDTuner::STunePIDTuner(float *input, float *output, sTune::TuningMethod tuningMethod)
     : _input(input),
       _output(output),
       _setpoint(0.0),
@@ -20,6 +20,7 @@ STunePIDTuner::STunePIDTuner(float *input, float *output)
       _ki(0.0),
       _kd(0.0),
       _gainsValid(false),
+      _tuningMethod(tuningMethod),
       _inputSpan(30.0),
       _outputSpan(255.0),
       _outputStart(0.0),
@@ -28,9 +29,8 @@ STunePIDTuner::STunePIDTuner(float *input, float *output)
       _settleTimeSec(5),
       _samples(300) {
     
-    // Create sTune instance with recommended settings for wind tunnel
-    // Using NoOvershoot_PID for stable, predictable tuning
-    _tuner = new sTune(input, output, sTune::NoOvershoot_PID, sTune::directIP, sTune::printSUMMARY);
+    // Create sTune instance with selected tuning method
+    _tuner = new sTune(input, output, _tuningMethod, sTune::directIP, sTune::printSUMMARY);
 }
 
 STunePIDTuner::~STunePIDTuner() {
@@ -80,7 +80,7 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     Serial.println("[sTune] AUTOTUNING STARTED");
     Serial.println("=====================================");
     Serial.print("[sTune] Target setpoint: "); Serial.print(_setpoint, 2); Serial.println(" m/s");
-    Serial.print("[sTune] Method: Inflection Point (No Overshoot)");
+    Serial.print("[sTune] Method: Inflection Point ("); Serial.print(getTuningMethodName()); Serial.println(")");
     Serial.println("\n[sTune] Configuration:");
     Serial.print("        Input span: "); Serial.print(inputSpan, 1); Serial.println(" m/s");
     Serial.print("        Output span: "); Serial.print(outputSpan, 0); Serial.println(" PWM");
@@ -148,7 +148,7 @@ STunePIDTuner::TuningStatus STunePIDTuner::update() {
                 Serial.print("        Process Gain: "); Serial.println(getProcessGain(), 4);
                 Serial.print("        Dead Time: "); Serial.print(getDeadTime(), 2); Serial.println(" s");
                 Serial.print("        Time Constant (Tau): "); Serial.print(getTau(), 2); Serial.println(" s");
-                Serial.println("[sTune] Tuning method: No Overshoot (stable)");
+                Serial.print("[sTune] Tuning method: "); Serial.println(getTuningMethodName());
                 Serial.println("[sTune] Gains ready to apply");
                 Serial.println("=====================================\n");
                 break;
@@ -235,4 +235,38 @@ float STunePIDTuner::getTau() const {
         return _tuner->GetTau();
     }
     return 0.0;
+}
+
+void STunePIDTuner::setTuningMethod(sTune::TuningMethod method) {
+    _tuningMethod = method;
+    if (_tuner != nullptr) {
+        _tuner->SetTuningMethod(method);
+    }
+}
+
+const char* STunePIDTuner::getTuningMethodName() const {
+    switch (_tuningMethod) {
+        case sTune::ZN_PID:
+            return "Ziegler-Nichols PID";
+        case sTune::DampedOsc_PID:
+            return "Damped Oscillation PID";
+        case sTune::NoOvershoot_PID:
+            return "No Overshoot PID";
+        case sTune::CohenCoon_PID:
+            return "Cohen-Coon PID";
+        case sTune::Mixed_PID:
+            return "Mixed PID";
+        case sTune::ZN_PI:
+            return "Ziegler-Nichols PI";
+        case sTune::DampedOsc_PI:
+            return "Damped Oscillation PI";
+        case sTune::NoOvershoot_PI:
+            return "No Overshoot PI";
+        case sTune::CohenCoon_PI:
+            return "Cohen-Coon PI";
+        case sTune::Mixed_PI:
+            return "Mixed PI";
+        default:
+            return "Unknown";
+    }
 }

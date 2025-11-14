@@ -142,12 +142,23 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
   - Advanced autotuning using inflection point method
   - More stable and predictable than relay tuning
   - Automatically determines step size and monitors system response
-  - Provides conservative "No Overshoot" tuning for stable operation
+  - Default: "No Overshoot" tuning for stable operation
   - Usage: Set target airspeed (min 2 m/s), then type `stune`
   - Duration: ~30-60 seconds depending on system response
+  - **Tuning method can be changed** at compile-time (see below)
 
 ### Compile-time (edit `Giga_Tunnel_PID.ino`)
 Open the sketch and edit the configuration block near the top:
+
+- `const sTune::TuningMethod STUNE_METHOD = sTune::NoOvershoot_PID;`
+  - Selects the sTune tuning method (default: NoOvershoot_PID for stability)
+  - Available options:
+    - `sTune::ZN_PID` - Ziegler-Nichols (moderate overshoot, fast response)
+    - `sTune::DampedOsc_PID` - Damped Oscillation (balanced)
+    - `sTune::NoOvershoot_PID` - No Overshoot (conservative, stable) **[DEFAULT]**
+    - `sTune::CohenCoon_PID` - Cohen-Coon (good for systems with delay)
+    - `sTune::Mixed_PID` - Mixed (average of all methods)
+  - For PI control instead of PID: use ZN_PI, DampedOsc_PI, NoOvershoot_PI, etc.
 
 - `const int PRESSURE_OVERSAMPLES = 5;`  
   - Oversampling per measurement (3–8 typical).

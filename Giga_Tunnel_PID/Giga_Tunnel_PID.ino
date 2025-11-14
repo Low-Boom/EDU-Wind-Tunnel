@@ -13,6 +13,16 @@
 #include <sTune.h>
 #include "STunePIDTuner.h"
 
+// sTune Configuration - User Selectable Tuning Method
+// Available methods:
+//   sTune::ZN_PID           - Ziegler-Nichols (moderate overshoot, fast response)
+//   sTune::DampedOsc_PID    - Damped Oscillation (balanced)
+//   sTune::NoOvershoot_PID  - No Overshoot (conservative, stable) [DEFAULT]
+//   sTune::CohenCoon_PID    - Cohen-Coon (good for systems with delay)
+//   sTune::Mixed_PID        - Mixed (average of all methods)
+// For PI control, use: ZN_PI, DampedOsc_PI, NoOvershoot_PI, CohenCoon_PI, Mixed_PI
+const sTune::TuningMethod STUNE_METHOD = sTune::NoOvershoot_PID;
+
 // MBED support
 // #include "mbed.h"
 
@@ -239,9 +249,11 @@ void setup() {
 
     // Initialize sTune wrapper (optional advanced autotuning)
     Serial.print("[INIT] sTune wrapper...");
-    sTuner = new STunePIDTuner(&currentAirSpeed, &currPWM);
+    sTuner = new STunePIDTuner(&currentAirSpeed, &currPWM, STUNE_METHOD);
     sTuner->setEmergencyStop(MAX_AIRSPEED);
     Serial.println(" OK");
+    Serial.print("        Tuning Method: ");
+    Serial.println(sTuner->getTuningMethodName());
     Serial.println("        Advanced autotuning available via 'stune' command");
     delay(100);
 

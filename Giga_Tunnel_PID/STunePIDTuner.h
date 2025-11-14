@@ -31,8 +31,9 @@ public:
      * Constructor
      * @param input Pointer to process variable (measured airspeed)
      * @param output Pointer to control output (PWM value)
+     * @param tuningMethod sTune tuning method (default: NoOvershoot_PID)
      */
-    STunePIDTuner(float *input, float *output);
+    STunePIDTuner(float *input, float *output, sTune::TuningMethod tuningMethod = sTune::NoOvershoot_PID);
 
     /**
      * Destructor
@@ -101,6 +102,18 @@ public:
     void setEmergencyStop(float limit);
 
     /**
+     * Set the tuning method
+     * @param method sTune tuning method
+     */
+    void setTuningMethod(sTune::TuningMethod method);
+
+    /**
+     * Get the current tuning method name as string
+     * @return Tuning method name
+     */
+    const char* getTuningMethodName() const;
+
+    /**
      * Print tuning results to Serial
      */
     void printResults();
@@ -122,6 +135,7 @@ private:
     unsigned long _timeout;     // Timeout in milliseconds
     float _kp, _ki, _kd;        // Tuned gains
     bool _gainsValid;           // Flag indicating if gains are valid
+    sTune::TuningMethod _tuningMethod;  // Selected tuning method
     
     // Configuration storage
     float _inputSpan;
