@@ -21,7 +21,7 @@
 //   sTune::CohenCoon_PID    - Cohen-Coon (good for systems with delay)
 //   sTune::Mixed_PID        - Mixed (average of all methods)
 // For PI control, use: ZN_PI, DampedOsc_PI, NoOvershoot_PI, CohenCoon_PI, Mixed_PI
-const sTune::TuningMethod STUNE_METHOD = sTune::NoOvershoot_PID;
+const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
 
 // MBED support
 // #include "mbed.h"
@@ -157,12 +157,7 @@ void setup() {
     
     Serial.println("\n\n");
     Serial.println("=====================================");
-    Serial.println("   Wind Tunnel Controller v10.5");
-    Serial.println("   Advanced Sensor Processing");
-    Serial.println("   - Sensor Oversampling (5x)");
-    Serial.println("   - Pressure Averaging (20 samples)");
-    Serial.println("   - Temperature Compensation");
-    Serial.println("   - Relay Auto-Tuning (Aggressive)");
+    Serial.println("   EDU Wind Tunnel PID Controller v1.1");
     Serial.println("   Build: 2025-11-09 00:08:20 UTC");
     Serial.println("   User: Low-Boom");
     Serial.println("=====================================");
@@ -291,7 +286,7 @@ void setup() {
     Serial.println("  Tip: Start conservative (e.g., tune 40 100)");
     Serial.println("");
     Serial.println("STUNE AUTO-TUNE (ADVANCED):");
-    Serial.println("  Method: Inflection Point (No Overshoot)");
+    Serial.println("  Method: Inflection Point (Set Mode at Compile)");
     Serial.println("  Tuning: Stable response, minimal overshoot");
     Serial.println("  1. Set target airspeed (min 2 m/s)");
     Serial.println("  2. Type 'stune'");
