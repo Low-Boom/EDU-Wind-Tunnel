@@ -10,7 +10,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 [![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://store-usa.arduino.cc/products/giga-r1-wifi?srsltid=AfmBOop3Aqtaf3BpQPH1OCf3aJT8Pt39YOuv7pEPDY4g7xi1-DEwiopE)
 [![Arduino](https://img.shields.io/badge/Arduino-Mega%202560%20R3-00979D?logo=arduino)](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOopk3fHnK26RSMwzgGKXDylUJ8HzUNyVYfBNoiiwnkMh62EVld_U)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
+[![Version](https://img.shields.io/badge/version-1.1-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
 [![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
 
 ---
