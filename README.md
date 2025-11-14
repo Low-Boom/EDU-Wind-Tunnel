@@ -196,6 +196,18 @@ elapsed time | airspeed (m/s) | target (m/s) | PWM (0–255) | differential pres
 ```
 ---
 
+## Serial Control from Android
+
+Once the sketch is compiled and uploaded to the Arduino, it can be controlled via a USB connection to an android phone using the excellent [Serial USB Terminal App by Kair Morichi](https://www.kai-morich.de/android/).
+
+1. Connect via a USB cable with whatever adapters or USB-C hubs are required for your particular phone and Arduino. A direct USB-C to USB-C cable will work for the Arduino Giga. 
+
+2. Set the Baud Rate to 115200 and operate as you would from the Arduino IDE
+
+3. It is recommended that you set macros in the app according to the Quick Command Reference table above.
+
+---
+
 ## ⚠️ Safety Warnings
 
 1. **Motor Power**: NEVER power motor from Arduino - use separate supply
