@@ -35,7 +35,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 - Serial free untethered control via Modulino controls and a screen for mobility
 - A Controllino PLC-based version for industrial applications and education
 - A [Mathworks Simulink](https://www.mathworks.com/products/simulink.html) and [Julia Hub DYAD](https://juliahub.com/products/dyad) compatible controller
-- Coursework materials for wind tunnel operation an design
+- Coursework materials for wind tunnel operation and design
 
 ---
 ## Detailed Documentation
