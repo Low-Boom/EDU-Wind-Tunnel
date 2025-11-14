@@ -21,6 +21,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 ### Control & Tuning
 - **Full PID Control** (Proportional, Integral, Derivative)
 - **Relay Auto-Tuning** (Åström-Hägglund method)
+- **sTune Auto-Tuning** (Inflection Point method - optional advanced tuning)
 - **Manual PID Tuning** (direct gain adjustment)
 - **PWM Rate Limiting** (smooth motor transitions)
 
@@ -90,6 +91,7 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
      - Adafruit Unified Sensor
      - QuickPID
      - Bolder Flight Systems MS4525DO
+     - **sTune** (optional - for advanced PID autotuning)
 
 4. **Upload Code**
    - Open `Giga_Tunnel_PID.ino`
@@ -117,6 +119,7 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 | `tune` | Auto-tune (auto PWM) | `tune` |
 | `tune <L> <H>` | Auto-tune (manual PWM) | `tune 40 100` |
 | `tune <Kp> <Ki> <Kd>` | Manual PID | `tune 20 8 12` |
+| `stune` | sTune auto-tune (advanced) | `stune` |
 | `recal` | Recalibrate sensor | `recal` |
 | `recal <N>` | Recalibrate (N samples) | `recal 100` |
 | `avg <N>` | Set averaging | `avg 10` |
@@ -135,8 +138,27 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
   - `tune <low> <high>` : force PWM range (manual). Use when auto-estimate is poor.  
   - `tune <Kp> <Ki> <Kd>` : manually apply PID gains; controller resets automatically.
 
+- `stune` (requires sTune library)
+  - Advanced autotuning using inflection point method
+  - More stable and predictable than relay tuning
+  - Automatically determines step size and monitors system response
+  - Default: "No Overshoot" tuning for stable operation
+  - Usage: Set target airspeed (min 2 m/s), then type `stune`
+  - Duration: ~30-60 seconds depending on system response
+  - **Tuning method can be changed** at compile-time (see below)
+
 ### Compile-time (edit `Giga_Tunnel_PID.ino`)
 Open the sketch and edit the configuration block near the top:
+
+- `const sTune::TuningMethod STUNE_METHOD = sTune::NoOvershoot_PID;`
+  - Selects the sTune tuning method (default: NoOvershoot_PID for stability)
+  - Available options:
+    - `sTune::ZN_PID` - Ziegler-Nichols (moderate overshoot, fast response)
+    - `sTune::DampedOsc_PID` - Damped Oscillation (balanced)
+    - `sTune::NoOvershoot_PID` - No Overshoot (conservative, stable) **[DEFAULT]**
+    - `sTune::CohenCoon_PID` - Cohen-Coon (good for systems with delay)
+    - `sTune::Mixed_PID` - Mixed (average of all methods)
+  - For PI control instead of PID: use ZN_PI, DampedOsc_PI, NoOvershoot_PI, etc.
 
 - `const int PRESSURE_OVERSAMPLES = 5;`  
   - Oversampling per measurement (3–8 typical).
@@ -191,6 +213,7 @@ This project uses open-source libraries:
 - QuickPID (MIT License)
 - Adafruit BMP3XX (BSD License)
 - Bolder Flight Systems MS4525DO (MIT License)
+- sTune (MIT License) - Optional advanced autotuning library by David Lloyd
 
 See individual library licenses for details.
 
