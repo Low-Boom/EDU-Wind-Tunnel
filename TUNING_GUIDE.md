@@ -262,3 +262,142 @@ Tune → Test → Observe → Adjust → Repeat
 ```
 tune 20 8 12    # Good starting point for most systems
 ```
+
+---
+
+## sTune Advanced Autotuning (Optional)
+
+### What is sTune?
+
+sTune is an advanced open-loop PID autotuner that uses a novel inflection point test method. It's an alternative to the relay tuning method and offers several advantages:
+
+**Benefits:**
+- **Faster tuning**: Typically completes in ½τ (half the system time constant)
+- **More stable**: Uses conservative tuning rules for minimal overshoot
+- **Automatic step sizing**: Determines optimal test parameters automatically
+- **Better process characterization**: Provides dead time, time constant, and process gain
+
+**How it works:**
+1. Applies a step change to the output (PWM)
+2. Monitors the system response curve
+3. Detects the inflection point using a moving tangent method
+4. Calculates process characteristics (gain, dead time, tau)
+5. Applies tuning rules to determine optimal PID gains
+
+### Using sTune
+
+**Prerequisites:**
+- Install sTune library via Arduino Library Manager
+- System must have S-shaped step response (first-order with delay)
+
+**Basic usage:**
+```
+1. Set target airspeed: 10
+2. Type: stune
+3. Wait for tuning to complete (~30-60 seconds)
+4. Gains automatically applied
+```
+
+**sTune vs Relay Tuning:**
+
+| Feature | Relay Tuning | sTune |
+|---------|--------------|-------|
+| Method | Oscillation-based | Step response |
+| Duration | ~30-60 seconds | ~30-60 seconds |
+| Tuning style | Aggressive | Conservative |
+| Overshoot | Some overshoot | Minimal/none |
+| Process info | Limited | Detailed |
+| Best for | Fast response | Stable operation |
+
+**When to use sTune:**
+- Educational environments where stability is critical
+- Research applications requiring precise control
+- Systems where overshoot must be minimized
+- When you want detailed process characterization
+
+**When to use relay tuning:**
+- Fast, responsive control needed
+- Competition or demonstration scenarios
+- Quick tuning iterations desired
+- Some overshoot is acceptable
+
+### sTune Tuning Methods
+
+sTune provides multiple tuning methods (configured in code):
+
+1. **NoOvershoot_PID** (default): Conservative, stable response
+2. **ZN_PID**: Ziegler-Nichols, moderate aggressiveness
+3. **DampedOsc_PID**: Balanced response
+4. **CohenCoon_PID**: Good for systems with delay
+5. **Mixed_PID**: Average of all methods
+
+The default configuration uses **NoOvershoot_PID** for maximum stability.
+
+### Example sTune Output
+
+```
+[sTune] AUTOTUNING COMPLETE!
+[sTune] Duration: 45 seconds
+[sTune] Tuned PID Gains:
+        Kp = 18.2456
+        Ki = 7.8234
+        Kd = 11.3421
+[sTune] Process Characteristics:
+        Process Gain: 0.8234
+        Dead Time: 2.34 s
+        Time Constant (Tau): 8.67 s
+```
+
+### Troubleshooting sTune
+
+**Problem: Tuning times out**
+- Increase test time estimate in code
+- Check motor/fan responds to PWM
+- Verify sensors are working
+- Ensure target is achievable
+
+**Problem: Poor gains**
+- System may not have S-curve response
+- Try increasing output step size
+- Use relay tuning instead
+- Check for mechanical issues
+
+**Problem: Error during tuning**
+- Target too low (must be ≥2 m/s)
+- Emergency stop triggered
+- Sensor malfunction
+- Review serial output for details
+
+### Customizing sTune Parameters
+
+Advanced users can modify parameters in `STunePIDTuner.cpp`:
+
+```cpp
+// Change tuning method (in constructor)
+_tuner = new sTune(input, output, 
+                   sTune::ZN_PID,        // Try different method
+                   sTune::directIP,      // Or direct5T for full test
+                   sTune::printSUMMARY);
+
+// Adjust in startTuning() call
+tuner->startTuning(
+    setpoint,     // Target speed
+    30.0,         // Input span (max airspeed)
+    255.0,        // Output span (PWM range)
+    0.0,          // Output start
+    100.0,        // Output step (adjust for system)
+    60,           // Test time estimate (seconds)
+    5,            // Settle time (seconds)
+    300           // Number of samples
+);
+```
+
+### References
+
+- [sTune GitHub Repository](https://github.com/Dlloydev/sTune)
+- [sTune Wiki](https://github.com/Dlloydev/sTune/wiki)
+- [Inflection Point Method](https://en.wikipedia.org/wiki/Inflection_point)
+
+---
+
+## Conclusion

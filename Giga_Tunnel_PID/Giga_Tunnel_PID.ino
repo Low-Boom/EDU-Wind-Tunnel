@@ -9,6 +9,10 @@
 #include "ms4525do.h"
 #include "math.h"
 
+// sTune library and wrapper (optional - for advanced autotuning)
+#include <sTune.h>
+#include "STunePIDTuner.h"
+
 // MBED support
 // #include "mbed.h"
 
@@ -103,6 +107,10 @@ int validCycles = 0;
 // Debug
 unsigned long debugCounter = 0;
 
+// sTune autotuning (optional alternative to relay tuning)
+STunePIDTuner *sTuner = nullptr;
+bool sTuneActive = false;
+
 // Forward declarations
 void OnTachPulse();
 void initializeBarometer();
@@ -118,6 +126,8 @@ unsigned int RPMcalc();
 void startRelayTune(int pwmLow = -1, int pwmHigh = -1);
 void runRelayTune();
 void setPressureAverageSamples(int samples);
+void startSTune();
+void runSTune();
 
 QuickPID myPID(&currentAirSpeed, &currPWM, &desiredAirSpeed);
 
@@ -227,6 +237,14 @@ void setup() {
     Serial.println(" per cycle");
     delay(100);
 
+    // Initialize sTune wrapper (optional advanced autotuning)
+    Serial.print("[INIT] sTune wrapper...");
+    sTuner = new STunePIDTuner(&currentAirSpeed, &currPWM);
+    sTuner->setEmergencyStop(MAX_AIRSPEED);
+    Serial.println(" OK");
+    Serial.println("        Advanced autotuning available via 'stune' command");
+    delay(100);
+
     startTime = millis();
     
     Serial.println("=====================================");
@@ -248,6 +266,7 @@ void setup() {
     Serial.println("    Example: 'tune 20 8 12'");
     Serial.println("  recal [N]               - Recalibrate sensor");
     Serial.println("  avg N                   - Set averaging samples");
+    Serial.println("  stune                   - sTune autotuning (advanced)");
     Serial.println("");
     Serial.println("AUTO-TUNE:");
     Serial.println("  Method: Relay + Aggressive Tuning Rules");
@@ -258,6 +277,16 @@ void setup() {
     Serial.println("  4. Aggressive PID gains calculated");
     Serial.println("  Duration: ~30-60 seconds");
     Serial.println("  Tip: Start conservative (e.g., tune 40 100)");
+    Serial.println("");
+    Serial.println("STUNE AUTO-TUNE (ADVANCED):");
+    Serial.println("  Method: Inflection Point (No Overshoot)");
+    Serial.println("  Tuning: Stable response, minimal overshoot");
+    Serial.println("  1. Set target airspeed (min 2 m/s)");
+    Serial.println("  2. Type 'stune'");
+    Serial.println("  3. System applies step and monitors response");
+    Serial.println("  4. Conservative PID gains calculated");
+    Serial.println("  Duration: ~30-60 seconds");
+    Serial.println("  Benefits: More stable than relay tuning");
     Serial.println("");
     Serial.println("MANUAL TUNING:");
     Serial.println("  tune <Kp> <Ki> <Kd> - Directly set gains");
@@ -283,7 +312,10 @@ void loop() {
         float currAirDensity = readBarometerSensor();        // Temperature compensated
         currentAirSpeed = calcCurrentAirSpeed(currPressure, currAirDensity);
 
-        if (!autoTuning) {
+        if (sTuneActive) {
+            // sTune autotuning mode
+            runSTune();
+        } else if (!autoTuning) {
             checkForUserAirspeedUpdate();
             
             // Normal PID control
@@ -308,7 +340,10 @@ void loop() {
         float error = desiredAirSpeed - currentAirSpeed;
 
         // Print data
-        if (autoTuning) {
+        if (sTuneActive) {
+            Serial.print("[sTune] ");
+            Serial.print(sTuner->getStatusString()); Serial.print(" | ");
+        } else if (autoTuning) {
             Serial.print("[TUNE] ");
             uint32_t tuneElapsed = (millis() - tuneStartTime) / 1000;
             Serial.print(tuneElapsed); Serial.print("s | ");
@@ -324,7 +359,7 @@ void loop() {
         Serial.print("Err:"); Serial.print(error, 2);
         
         // Show PID values and averaging every 20 readings
-        if (debugCounter % 20 == 0 && !autoTuning) {
+        if (debugCounter % 20 == 0 && !autoTuning && !sTuneActive) {
             Serial.print(" | Kp:"); Serial.print(Kp, 1);
             Serial.print(" Ki:"); Serial.print(Ki, 1);
             Serial.print(" Kd:"); Serial.print(Kd, 1);
@@ -831,6 +866,11 @@ void checkForUserAirspeedUpdate() {
         String inputVal = Serial.readStringUntil('\n');
         inputVal.trim();
         
+        if (inputVal.equalsIgnoreCase("stune")) {
+            startSTune();
+            return;
+        }
+        
         if (inputVal.equalsIgnoreCase("tune")) {
             startRelayTune();  // Auto PWM
             return;
@@ -1009,4 +1049,72 @@ void initializeBarometer() {
         Serial.println("        Temperature compensation: ENABLED");
     }
     delay(100);
+}
+
+// sTune autotuning functions
+void startSTune() {
+    if (desiredAirSpeed < MIN_TUNE_SETPOINT) {
+        Serial.println("\n[sTune] ERROR: Target too low for auto-tune");
+        Serial.print("[sTune] Minimum target: ");
+        Serial.print(MIN_TUNE_SETPOINT, 2);
+        Serial.println(" m/s");
+        Serial.println("[sTune] Set a higher target speed first (e.g., 10)");
+        Serial.println("[sTune] Then type 'stune' to start\n");
+        return;
+    }
+    
+    // Save current averaging for potential restoration
+    savedAverageSamples = pressureAverageSamples;
+    
+    // Start sTune with appropriate parameters
+    // Parameters: setpoint, inputSpan, outputSpan, outputStart, outputStep, testTime, settleTime, samples
+    float outputStep = desiredAirSpeed * 8.0; // Estimate based on typical response
+    outputStep = constrain(outputStep, 60.0, 200.0);
+    
+    if (sTuner->startTuning(desiredAirSpeed, MAX_AIRSPEED, 255.0, 0.0, outputStep, 60, 5, 300)) {
+        sTuneActive = true;
+    }
+}
+
+void runSTune() {
+    // Update sTune state machine
+    STunePIDTuner::TuningStatus status = sTuner->update();
+    
+    // Write PWM output (sTuner manages the output value via currPWM pointer)
+    analogWrite(PWM_pin, (int)round(currPWM));
+    
+    if (status == STunePIDTuner::COMPLETED) {
+        // Get tuned gains and apply to PID
+        float newKp, newKi, newKd;
+        if (sTuner->getTunedGains(newKp, newKi, newKd)) {
+            Kp = newKp;
+            Ki = newKi;
+            Kd = newKd;
+            
+            myPID.SetTunings(Kp, Ki, Kd);
+            myPID.Reset();
+            
+            Serial.println("[sTune] Gains applied to PID controller");
+            Serial.println("[sTune] Resuming normal operation");
+        }
+        
+        // Restore averaging setting
+        setPressureAverageSamples(savedAverageSamples);
+        
+        sTuneActive = false;
+        sTuner->reset();
+        lastPWMOutput = 0;
+        
+    } else if (status == STunePIDTuner::TIMEOUT || status == STunePIDTuner::ERROR) {
+        Serial.println("[sTune] Tuning failed - keeping previous gains");
+        
+        // Restore averaging setting
+        setPressureAverageSamples(savedAverageSamples);
+        
+        sTuneActive = false;
+        sTuner->reset();
+        currPWM = 0;
+        analogWrite(PWM_pin, 0);
+        lastPWMOutput = 0;
+    }
 }
