@@ -11,18 +11,34 @@
 
 #include "I2CScanner.h"
 
+// Global device registry
+static I2CDeviceInfo deviceRegistry[MAX_I2C_DEVICES];
+static int deviceCount = 0;
+
+// Helper function to add a device to the registry
+static void registerDevice(uint8_t address, TwoWire* bus, const char* busName) {
+    if (deviceCount < MAX_I2C_DEVICES) {
+        deviceRegistry[deviceCount].address = address;
+        deviceRegistry[deviceCount].bus = bus;
+        deviceRegistry[deviceCount].busName = busName;
+        deviceCount++;
+    }
+}
+
 // Helper function to scan a single I2C bus
 static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     out.print("Scanning I2C bus ");
     out.println(busName);
     
-    // Set timeout to prevent hanging when no devices are connected
-    // Modern Arduino Wire libraries support this (GIGA R1, Uno Rev4, etc.)
+    // Set a very short timeout to prevent long delays on empty buses
+    // The timeout unit varies by platform, so we use a conservative value
     #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
         wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
     #endif
     
     int devicesFound = 0;
+    int consecutiveTimeouts = 0;
+    const int MAX_CONSECUTIVE_TIMEOUTS = 10; // Abort after 10 consecutive timeouts
     
     // Scan addresses 1-126 (0x01 to 0x7E)
     // Address 0 is reserved for general call
@@ -33,15 +49,34 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
         uint8_t error = wire->endTransmission(true);
         
         if (error == 0) {
-            // Device found
+            // Device found - add to registry
+            registerDevice(addr, wire, busName);
+            
             out.print(" - Found device at 0x");
             if (addr < 16) {
                 out.print("0");
             }
             out.println(addr, HEX);
             devicesFound++;
+            consecutiveTimeouts = 0; // Reset timeout counter on success
+        } else if (error == 5) {
+            // Error 5 is timeout - increment counter
+            consecutiveTimeouts++;
+            if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+                out.print(" - Scan aborted at address 0x");
+                if (addr < 16) {
+                    out.print("0");
+                }
+                out.print(addr, HEX);
+                out.println(" (too many timeouts - bus likely has no pull-ups)");
+                break;
+            }
+        } else {
+            // Other errors (NACK, etc.) - reset timeout counter
+            consecutiveTimeouts = 0;
         }
-        // Note: error == 4 means unknown error, other values are timeouts/NACK
+        // Note: error codes: 0=success, 1=data too long, 2=NACK on address, 
+        //                    3=NACK on data, 4=other error, 5=timeout
         
         // Small delay between scans to prevent bus lockup
         delayMicroseconds(100);
@@ -66,6 +101,9 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
 }
 
 void scanAllI2CBuses(Stream &out) {
+    // Clear the device registry before scanning
+    deviceCount = 0;
+    
     out.println("\n=====================================");
     out.println("[I2C] Multi-Bus Scanner");
     out.println("=====================================");
@@ -81,25 +119,61 @@ void scanAllI2CBuses(Stream &out) {
     out.println(WIRE_INTERFACES_COUNT);
     out.println();
     
-    // Always scan Wire (primary bus)
-    // Note: Wire should already be initialized by caller
-    scanSingleBus(&Wire, "Wire", out);
-    
-    // Scan Wire1 if available (many modern boards)
+    // Initialize all I2C buses FIRST before scanning any of them
+    // This prevents issues on boards like Uno Rev4 where an empty Wire bus
+    // can hang during scanning if Wire1 hasn't been initialized yet
     #if WIRE_INTERFACES_COUNT > 1
-        // Initialize Wire1 before scanning to prevent hanging
+        out.println("Initializing Wire1...");
         Wire1.begin();
+    #endif
+    
+    #if WIRE_INTERFACES_COUNT > 2
+        out.println("Initializing Wire2...");
+        Wire2.begin();
+    #endif
+    
+    // On multi-bus boards (like Uno Rev4), scan Wire1 FIRST
+    // This works around issue where empty Wire bus can hang even with timeout
+    #if WIRE_INTERFACES_COUNT > 1
         scanSingleBus(&Wire1, "Wire1", out);
     #endif
     
-    // Scan Wire2 if available (Arduino GIGA H7)
+    // Scan Wire2 before Wire if available (Arduino GIGA H7)
     #if WIRE_INTERFACES_COUNT > 2
-        // Initialize Wire2 before scanning to prevent hanging
-        Wire2.begin();
         scanSingleBus(&Wire2, "Wire2", out);
     #endif
+    
+    // Scan Wire bus (primary I2C bus)
+    // On multi-bus boards, Wire is scanned last so Wire1/Wire2 are already found
+    // Early abort logic in scanSingleBus prevents long delays on empty buses
+    scanSingleBus(&Wire, "Wire", out);
     
     out.println("=====================================");
     out.println("[I2C] Scan complete");
     out.println("=====================================\n");
+}
+
+// Public helper functions to query the device registry
+
+TwoWire* getDeviceBus(uint8_t address, const char** busName) {
+    for (int i = 0; i < deviceCount; i++) {
+        if (deviceRegistry[i].address == address) {
+            if (busName != nullptr) {
+                *busName = deviceRegistry[i].busName;
+            }
+            return deviceRegistry[i].bus;
+        }
+    }
+    return nullptr; // Device not found
+}
+
+int getDeviceCount() {
+    return deviceCount;
+}
+
+const I2CDeviceInfo* getDeviceInfo(int index) {
+    if (index >= 0 && index < deviceCount) {
+        return &deviceRegistry[index];
+    }
+    return nullptr;
 }
