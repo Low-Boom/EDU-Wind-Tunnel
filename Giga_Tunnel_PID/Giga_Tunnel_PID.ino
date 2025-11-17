@@ -13,6 +13,9 @@
 #include <sTune.h>
 #include "STunePIDTuner.h"
 
+// I2C Scanner utility
+#include "I2CScanner.h"
+
 // sTune Configuration - User Selectable Tuning Method
 // Available methods:
 //   sTune::ZN_PID           - Ziegler-Nichols (moderate overshoot, fast response)
@@ -175,6 +178,9 @@ void setup() {
     Wire.setClock(400000);
     Serial.println(" OK (400kHz)");
     delay(100);
+
+    // Scan all I2C buses for connected devices
+    scanAllI2CBuses(Serial);
 
     // Configure pressure sensor
     Serial.print("[INIT] MS4525DO pressure sensor...");
