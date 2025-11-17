@@ -105,16 +105,23 @@ void scanAllI2CBuses(Stream &out) {
         scanSingleBus(&Wire2, "Wire2", out);
     #endif
     
-    // On multi-bus boards, skip Wire scanning to prevent hangs on boards like Uno Rev4
-    // where an empty Wire bus with no pull-ups can hang indefinitely
-    // Single-bus boards (classic Uno, Mega) will still scan Wire normally
-    #if WIRE_INTERFACES_COUNT > 1
-        out.println("Scanning I2C bus Wire (skipped - use Wire1 for sensors on multi-bus boards)");
-        out.println(" - Note: Wire scanning disabled on multi-bus boards to prevent hangs");
-        out.println(" - Connect sensors to Wire1 (Qwiic connector) instead");
-        out.println();
+    // Scan Wire bus with platform-specific handling
+    // On Uno Rev4, an empty Wire bus can hang indefinitely due to hardware limitations
+    // Other boards should scan Wire normally
+    #if defined(ARDUINO_UNOR4_WIFI) || defined(ARDUINO_UNOR4_MINIMA) || defined(ARDUINO_ARCH_RENESAS)
+        // Uno Rev4: Skip Wire if we have Wire1 available to prevent hangs
+        #if WIRE_INTERFACES_COUNT > 1
+            out.println("Scanning I2C bus Wire (skipped on Uno Rev4 - use Wire1)");
+            out.println(" - Note: Wire bus scanning disabled on Uno Rev4 to prevent hangs");
+            out.println(" - Uno Rev4 Wire bus hangs when empty (no pull-ups)");
+            out.println(" - Connect sensors to Wire1 via Qwiic connector");
+            out.println();
+        #else
+            // Single bus Uno Rev4 (shouldn't happen, but handle it)
+            scanSingleBus(&Wire, "Wire", out);
+        #endif
     #else
-        // Single-bus boards: scan Wire normally
+        // All other boards: scan Wire normally
         scanSingleBus(&Wire, "Wire", out);
     #endif
     
