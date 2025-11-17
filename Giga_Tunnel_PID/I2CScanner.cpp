@@ -23,7 +23,8 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     // Addresses 127 are reserved
     for (uint8_t addr = 1; addr < 127; addr++) {
         wire->beginTransmission(addr);
-        uint8_t error = wire->endTransmission();
+        // Use sendStop=true for proper I2C bus release, prevents hanging
+        uint8_t error = wire->endTransmission(true);
         
         if (error == 0) {
             // Device found
@@ -35,6 +36,9 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
             devicesFound++;
         }
         // Note: error == 4 means unknown error, other values are timeouts/NACK
+        
+        // Small delay between scans to prevent bus lockup
+        delayMicroseconds(100);
     }
     
     if (devicesFound == 0) {
