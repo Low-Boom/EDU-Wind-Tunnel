@@ -181,15 +181,33 @@ void setup() {
 
     // Scan all I2C buses for connected devices
     scanAllI2CBuses(Serial);
-
-    // Configure pressure sensor
+    
+    // Configure pressure sensor (MS4525DO at 0x28)
+    // Automatically detect which bus it's on from the scan results
+    const char* dpsBusName = nullptr;
+    TwoWire* dpsBus = getDeviceBus(DPS_ADDRESS, &dpsBusName);
+    
     Serial.print("[INIT] MS4525DO pressure sensor...");
-    pres.Config(&Wire, DPS_ADDRESS, 1.0f, -1.0f);
+    if (dpsBus == nullptr) {
+        Serial.println(" NOT FOUND!");
+        Serial.print("[ERROR] No device at I2C address 0x");
+        Serial.print(DPS_ADDRESS, HEX);
+        Serial.println(" on any bus");
+        Serial.println("[ERROR] Check sensor connections");
+        while (1) {
+            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+            delay(200);
+        }
+    }
+    
+    Serial.print(" (found on "); Serial.print(dpsBusName); Serial.print(")");
+    pres.Config(dpsBus, DPS_ADDRESS, 1.0f, -1.0f);
     
     if (!pres.Begin()) {
         Serial.println(" FAILED!");
         Serial.println("[ERROR] Cannot communicate with pressure sensor");
-        Serial.println("[ERROR] Check I2C address 0x28");
+        Serial.print("[ERROR] Check I2C address 0x28 on ");
+        Serial.println(dpsBusName);
         while (1) {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
             delay(200);
@@ -1036,11 +1054,34 @@ void OnTachPulse() {
 void initializeBarometer() { 
     Serial.print("[INIT] BMP3XX barometer (I2C)...");
     
-    if (!bmp.begin_I2C(BMP_I2C_ADDRESS)) {
+    // Try to find BMP3XX on any bus - check both common addresses
+    const char* bmpBusName = nullptr;
+    TwoWire* bmpBus = getDeviceBus(BMP_I2C_ADDRESS, &bmpBusName);
+    
+    if (bmpBus == nullptr) {
+        // Try alternate address
+        bmpBus = getDeviceBus(0x76, &bmpBusName);
+    }
+    
+    if (bmpBus == nullptr) {
+        Serial.println(" NOT FOUND!");
+        Serial.println("[ERROR] BMP3 not found at 0x76 or 0x77 on any bus");
+        Serial.println("[ERROR] Check sensor connections");
+        while (1) {
+            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+            delay(500);
+        }
+    }
+    
+    Serial.print(" (found on "); Serial.print(bmpBusName); Serial.print(")");
+    
+    if (!bmp.begin_I2C(BMP_I2C_ADDRESS, bmpBus)) {
         Serial.println(" trying 0x76...");
-        if (!bmp.begin_I2C(0x76)) {
+        if (!bmp.begin_I2C(0x76, bmpBus)) {
             Serial.println(" FAILED!");
-            Serial.println("[ERROR] BMP3 not found at 0x76 or 0x77");
+            Serial.println("[ERROR] BMP3 found in scan but cannot initialize");
+            Serial.print("[ERROR] Check connections on ");
+            Serial.println(bmpBusName);
             while (1) {
                 digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
                 delay(500);
