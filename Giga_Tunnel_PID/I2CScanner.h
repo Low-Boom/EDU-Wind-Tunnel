@@ -20,14 +20,17 @@
  * 
  * Automatically detects number of I2C buses using WIRE_INTERFACES_COUNT:
  * - Classic Uno/Nano: Scans Wire only
- * - Arduino Uno Rev4: Scans Wire1 only (Wire skipped due to hardware hang issue)
- * - RP2040/ESP32/SAMD: Scans Wire and Wire1
- * - Arduino GIGA (H7): Scans Wire, Wire1, and Wire2
+ * - Arduino Uno Rev4: Scans Wire1, then Wire
+ * - RP2040/ESP32/SAMD: Scans Wire1, then Wire
+ * - Arduino GIGA (H7): Scans Wire1, Wire2, then Wire
  * 
- * Platform-specific handling:
- * - Uno Rev4: Wire bus scanning is disabled when Wire1 is available due to
- *   hardware limitation where empty Wire bus hangs indefinitely (no timeout)
- * - Other boards: All available buses are scanned normally
+ * Includes early abort logic to prevent long delays when scanning empty buses:
+ * - Uses short timeout (1ms) for each I2C transaction
+ * - Aborts scan after 10 consecutive timeouts (bus has no pull-ups)
+ * - Typical scan time: <1 second for empty bus, <3 seconds for full scan
+ * 
+ * On multi-bus boards, Wire1 is scanned first to find sensors quickly,
+ * then Wire is scanned last (may abort early if empty).
  * 
  * Initializes all available I2C buses before scanning.
  * 

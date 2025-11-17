@@ -16,13 +16,15 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     out.print("Scanning I2C bus ");
     out.println(busName);
     
-    // Set timeout to prevent hanging when no devices are connected
-    // Modern Arduino Wire libraries support this (GIGA R1, Uno Rev4, etc.)
+    // Set a very short timeout to prevent long delays on empty buses
+    // The timeout unit varies by platform, so we use a conservative value
     #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
-        wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
+        wire->setWireTimeout(1000, true); // 1ms timeout (or 1000us depending on platform)
     #endif
     
     int devicesFound = 0;
+    int consecutiveTimeouts = 0;
+    const int MAX_CONSECUTIVE_TIMEOUTS = 10; // Abort after 10 consecutive timeouts
     
     // Scan addresses 1-126 (0x01 to 0x7E)
     // Address 0 is reserved for general call
@@ -40,8 +42,25 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
             }
             out.println(addr, HEX);
             devicesFound++;
+            consecutiveTimeouts = 0; // Reset timeout counter on success
+        } else if (error == 5) {
+            // Error 5 is timeout - increment counter
+            consecutiveTimeouts++;
+            if (consecutiveTimeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+                out.print(" - Scan aborted at address 0x");
+                if (addr < 16) {
+                    out.print("0");
+                }
+                out.print(addr, HEX);
+                out.println(" (too many timeouts - bus likely has no pull-ups)");
+                break;
+            }
+        } else {
+            // Other errors (NACK, etc.) - reset timeout counter
+            consecutiveTimeouts = 0;
         }
-        // Note: error == 4 means unknown error, other values are timeouts/NACK
+        // Note: error codes: 0=success, 1=data too long, 2=NACK on address, 
+        //                    3=NACK on data, 4=other error, 5=timeout
         
         // Small delay between scans to prevent bus lockup
         delayMicroseconds(100);
@@ -105,25 +124,10 @@ void scanAllI2CBuses(Stream &out) {
         scanSingleBus(&Wire2, "Wire2", out);
     #endif
     
-    // Scan Wire bus with platform-specific handling
-    // On Uno Rev4, an empty Wire bus can hang indefinitely due to hardware limitations
-    // Other boards should scan Wire normally
-    #if defined(ARDUINO_UNOR4_WIFI) || defined(ARDUINO_UNOR4_MINIMA) || defined(ARDUINO_ARCH_RENESAS)
-        // Uno Rev4: Skip Wire if we have Wire1 available to prevent hangs
-        #if WIRE_INTERFACES_COUNT > 1
-            out.println("Scanning I2C bus Wire (skipped on Uno Rev4 - use Wire1)");
-            out.println(" - Note: Wire bus scanning disabled on Uno Rev4 to prevent hangs");
-            out.println(" - Uno Rev4 Wire bus hangs when empty (no pull-ups)");
-            out.println(" - Connect sensors to Wire1 via Qwiic connector");
-            out.println();
-        #else
-            // Single bus Uno Rev4 (shouldn't happen, but handle it)
-            scanSingleBus(&Wire, "Wire", out);
-        #endif
-    #else
-        // All other boards: scan Wire normally
-        scanSingleBus(&Wire, "Wire", out);
-    #endif
+    // Scan Wire bus (primary I2C bus)
+    // On multi-bus boards, Wire is scanned last so Wire1/Wire2 are already found
+    // Early abort logic in scanSingleBus prevents long delays on empty buses
+    scanSingleBus(&Wire, "Wire", out);
     
     out.println("=====================================");
     out.println("[I2C] Scan complete");
