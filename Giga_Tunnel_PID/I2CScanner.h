@@ -20,12 +20,16 @@
  * 
  * Automatically detects number of I2C buses using WIRE_INTERFACES_COUNT:
  * - Classic Uno/Nano: Scans Wire only
- * - Arduino Uno Rev4: Scans Wire and Wire1
- * - RP2040/ESP32/SAMD: Scans Wire and Wire1
- * - Arduino GIGA (H7): Scans Wire, Wire1, and Wire2
+ * - Arduino Uno Rev4: Scans Wire1 first, then tests Wire before scanning
+ * - RP2040/ESP32/SAMD: Scans Wire1 first, then Wire
+ * - Arduino GIGA (H7): Scans Wire1, Wire2, then Wire
  * 
  * Initializes all available I2C buses before scanning to prevent hanging
  * on boards like Uno Rev4 when an empty bus is scanned.
+ * 
+ * On multi-bus boards, Wire is tested for responsiveness before scanning.
+ * If Wire bus is not responsive (no pull-ups), scanning is skipped with
+ * a helpful message to use Wire1 instead.
  * 
  * For each address 1-126, performs beginTransmission() and checks
  * endTransmission() == 0 to detect device presence.
