@@ -19,7 +19,7 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     // Set timeout to prevent hanging when no devices are connected
     // Modern Arduino Wire libraries support this (GIGA R1, Uno Rev4, etc.)
     #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
-        wire->setWireTimeout(250, true); // 25ms timeout, reset on each call
+        wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
     #endif
     
     int devicesFound = 0;
@@ -81,21 +81,30 @@ void scanAllI2CBuses(Stream &out) {
     out.println(WIRE_INTERFACES_COUNT);
     out.println();
     
-    // Always scan Wire (primary bus)
+    // Initialize all I2C buses FIRST before scanning any of them
+    // This prevents issues on boards like Uno Rev4 where an empty Wire bus
+    // can hang during scanning if Wire1 hasn't been initialized yet
+    #if WIRE_INTERFACES_COUNT > 1
+        out.println("Initializing Wire1...");
+        Wire1.begin();
+    #endif
+    
+    #if WIRE_INTERFACES_COUNT > 2
+        out.println("Initializing Wire2...");
+        Wire2.begin();
+    #endif
+    
+    // Now scan all buses
     // Note: Wire should already be initialized by caller
     scanSingleBus(&Wire, "Wire", out);
     
     // Scan Wire1 if available (many modern boards)
     #if WIRE_INTERFACES_COUNT > 1
-        // Initialize Wire1 before scanning to prevent hanging
-        Wire1.begin();
         scanSingleBus(&Wire1, "Wire1", out);
     #endif
     
     // Scan Wire2 if available (Arduino GIGA H7)
     #if WIRE_INTERFACES_COUNT > 2
-        // Initialize Wire2 before scanning to prevent hanging
-        Wire2.begin();
         scanSingleBus(&Wire2, "Wire2", out);
     #endif
     
