@@ -16,6 +16,12 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     out.print("Scanning I2C bus ");
     out.println(busName);
     
+    // Set timeout to prevent hanging when no devices are connected
+    // Modern Arduino Wire libraries support this (GIGA R1, Uno Rev4, etc.)
+    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
+        wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
+    #endif
+    
     int devicesFound = 0;
     
     // Scan addresses 1-126 (0x01 to 0x7E)
@@ -50,6 +56,12 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
         out.print(": ");
         out.println(devicesFound);
     }
+    
+    // Clear any timeout flags that may have been set during scanning
+    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
+        wire->clearWireTimeoutFlag();
+    #endif
+    
     out.println();
 }
 
