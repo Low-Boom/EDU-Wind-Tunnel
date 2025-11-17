@@ -147,10 +147,6 @@ QuickPID myPID(&currentAirSpeed, &currPWM, &desiredAirSpeed);
 bfs::Ms4525do pres;
 Adafruit_BMP3XX bmp;
 
-// I2C bus to use for sensors (determined at runtime based on board type)
-TwoWire* sensorBus = &Wire;
-const char* sensorBusName = "Wire";
-
 volatile unsigned long LastPulseTime = 0;
 volatile unsigned long PulseInterval = 0;
 unsigned long PrevPulseInterval = 0;
@@ -186,31 +182,32 @@ void setup() {
     // Scan all I2C buses for connected devices
     scanAllI2CBuses(Serial);
     
-    // Determine which I2C bus to use for sensors
-    // On multi-bus boards (Uno Rev4, Giga), sensors are typically on Wire1 (Qwiic)
-    // On single-bus boards (Uno, Mega), sensors are on Wire
-    #if defined(WIRE_INTERFACES_COUNT) && WIRE_INTERFACES_COUNT > 1
-        // Multi-bus board: use Wire1 for Qwiic-connected sensors
-        sensorBus = &Wire1;
-        sensorBusName = "Wire1";
-        Serial.println("[CONFIG] Multi-bus board detected - using Wire1 for sensors (Qwiic)");
-    #else
-        // Single-bus board: use Wire
-        sensorBus = &Wire;
-        sensorBusName = "Wire";
-        Serial.println("[CONFIG] Single-bus board - using Wire for sensors");
-    #endif
-
-    // Configure pressure sensor
+    // Configure pressure sensor (MS4525DO at 0x28)
+    // Automatically detect which bus it's on from the scan results
+    const char* dpsBusName = nullptr;
+    TwoWire* dpsBus = getDeviceBus(DPS_ADDRESS, &dpsBusName);
+    
     Serial.print("[INIT] MS4525DO pressure sensor...");
-    Serial.print(" (on "); Serial.print(sensorBusName); Serial.print(")");
-    pres.Config(sensorBus, DPS_ADDRESS, 1.0f, -1.0f);
+    if (dpsBus == nullptr) {
+        Serial.println(" NOT FOUND!");
+        Serial.print("[ERROR] No device at I2C address 0x");
+        Serial.print(DPS_ADDRESS, HEX);
+        Serial.println(" on any bus");
+        Serial.println("[ERROR] Check sensor connections");
+        while (1) {
+            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+            delay(200);
+        }
+    }
+    
+    Serial.print(" (found on "); Serial.print(dpsBusName); Serial.print(")");
+    pres.Config(dpsBus, DPS_ADDRESS, 1.0f, -1.0f);
     
     if (!pres.Begin()) {
         Serial.println(" FAILED!");
         Serial.println("[ERROR] Cannot communicate with pressure sensor");
         Serial.print("[ERROR] Check I2C address 0x28 on ");
-        Serial.println(sensorBusName);
+        Serial.println(dpsBusName);
         while (1) {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
             delay(200);
@@ -1056,15 +1053,35 @@ void OnTachPulse() {
 
 void initializeBarometer() { 
     Serial.print("[INIT] BMP3XX barometer (I2C)...");
-    Serial.print(" (on "); Serial.print(sensorBusName); Serial.print(")");
     
-    if (!bmp.begin_I2C(BMP_I2C_ADDRESS, sensorBus)) {
+    // Try to find BMP3XX on any bus - check both common addresses
+    const char* bmpBusName = nullptr;
+    TwoWire* bmpBus = getDeviceBus(BMP_I2C_ADDRESS, &bmpBusName);
+    
+    if (bmpBus == nullptr) {
+        // Try alternate address
+        bmpBus = getDeviceBus(0x76, &bmpBusName);
+    }
+    
+    if (bmpBus == nullptr) {
+        Serial.println(" NOT FOUND!");
+        Serial.println("[ERROR] BMP3 not found at 0x76 or 0x77 on any bus");
+        Serial.println("[ERROR] Check sensor connections");
+        while (1) {
+            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+            delay(500);
+        }
+    }
+    
+    Serial.print(" (found on "); Serial.print(bmpBusName); Serial.print(")");
+    
+    if (!bmp.begin_I2C(BMP_I2C_ADDRESS, bmpBus)) {
         Serial.println(" trying 0x76...");
-        if (!bmp.begin_I2C(0x76, sensorBus)) {
+        if (!bmp.begin_I2C(0x76, bmpBus)) {
             Serial.println(" FAILED!");
-            Serial.println("[ERROR] BMP3 not found at 0x76 or 0x77");
+            Serial.println("[ERROR] BMP3 found in scan but cannot initialize");
             Serial.print("[ERROR] Check connections on ");
-            Serial.println(sensorBusName);
+            Serial.println(bmpBusName);
             while (1) {
                 digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
                 delay(500);

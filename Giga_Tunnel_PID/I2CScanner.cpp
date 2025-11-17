@@ -11,6 +11,20 @@
 
 #include "I2CScanner.h"
 
+// Global device registry
+static I2CDeviceInfo deviceRegistry[MAX_I2C_DEVICES];
+static int deviceCount = 0;
+
+// Helper function to add a device to the registry
+static void registerDevice(uint8_t address, TwoWire* bus, const char* busName) {
+    if (deviceCount < MAX_I2C_DEVICES) {
+        deviceRegistry[deviceCount].address = address;
+        deviceRegistry[deviceCount].bus = bus;
+        deviceRegistry[deviceCount].busName = busName;
+        deviceCount++;
+    }
+}
+
 // Helper function to scan a single I2C bus
 static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     out.print("Scanning I2C bus ");
@@ -35,7 +49,9 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
         uint8_t error = wire->endTransmission(true);
         
         if (error == 0) {
-            // Device found
+            // Device found - add to registry
+            registerDevice(addr, wire, busName);
+            
             out.print(" - Found device at 0x");
             if (addr < 16) {
                 out.print("0");
@@ -85,6 +101,9 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
 }
 
 void scanAllI2CBuses(Stream &out) {
+    // Clear the device registry before scanning
+    deviceCount = 0;
+    
     out.println("\n=====================================");
     out.println("[I2C] Multi-Bus Scanner");
     out.println("=====================================");
@@ -132,4 +151,29 @@ void scanAllI2CBuses(Stream &out) {
     out.println("=====================================");
     out.println("[I2C] Scan complete");
     out.println("=====================================\n");
+}
+
+// Public helper functions to query the device registry
+
+TwoWire* getDeviceBus(uint8_t address, const char** busName) {
+    for (int i = 0; i < deviceCount; i++) {
+        if (deviceRegistry[i].address == address) {
+            if (busName != nullptr) {
+                *busName = deviceRegistry[i].busName;
+            }
+            return deviceRegistry[i].bus;
+        }
+    }
+    return nullptr; // Device not found
+}
+
+int getDeviceCount() {
+    return deviceCount;
+}
+
+const I2CDeviceInfo* getDeviceInfo(int index) {
+    if (index >= 0 && index < deviceCount) {
+        return &deviceRegistry[index];
+    }
+    return nullptr;
 }
