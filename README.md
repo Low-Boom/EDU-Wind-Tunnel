@@ -63,16 +63,9 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 ## Hardware Setup
 
-See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specifications.
-
-**Quick Connections:**
-```
-Arduino Pin 9   → PWM Control Signal
-Arduino Pin 2   → PWM Tachometer Feedback Signal (optional)
-I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
-```
-
 ⚠️ Motor power supply must be separate from Arduino! This is 120V AC Power for the AC Infinity Fan or a 12V power supply for the 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
+
+See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specifications.
 
 ---
 
