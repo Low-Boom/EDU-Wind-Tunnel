@@ -116,6 +116,7 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 The system includes an automatic I2C device scanner that runs at startup to help verify sensor connections. The scanner automatically detects and scans all available I2C buses on your Arduino board:
 
 - **Classic Arduino (Uno, Nano, Mega)**: Scans Wire only
+- **Arduino Uno Rev4**: Scans Wire and Wire1
 - **Modern Boards (RP2040, ESP32, SAMD21/51)**: Scans Wire and Wire1
 - **Arduino GIGA R1**: Scans Wire, Wire1, and Wire2
 
@@ -125,11 +126,14 @@ On successful startup, you should see:
 ```
 [I2C] Multi-Bus Scanner
 =====================================
-Available I2C buses: 1
+Available I2C buses: 2
 Scanning I2C bus Wire
  - Found device at 0x28
  - Found device at 0x77
  - Total devices found on Wire: 2
+
+Scanning I2C bus Wire1
+ - No I2C devices found on Wire1
 
 [I2C] Scan complete
 =====================================
