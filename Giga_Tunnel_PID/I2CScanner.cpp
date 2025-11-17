@@ -33,7 +33,7 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     // Set a very short timeout to prevent long delays on empty buses
     // The timeout unit varies by platform, so we use a conservative value
     #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
-        wire->setWireTimeout(1000, true); // 1ms timeout (or 1000us depending on platform)
+        wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
     #endif
     
     int devicesFound = 0;
