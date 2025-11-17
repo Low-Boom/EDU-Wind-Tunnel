@@ -2,7 +2,7 @@
 
 ## Hardware Modifications to Educational Wind Tunnel
 A static pressure ring must be added at the inlet of the test section to measure airspeed.
-An updatead version of the test section or an additional component between the inlet and test section are included for this purpose. Get them from Printables at LINK LINK LINK.
+An updatead version of the test section or an additional component between the inlet and test section are included for this purpose. Get them from [Printables](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu).
 
 ## Required Components
 
@@ -16,9 +16,6 @@ An updatead version of the test section or an additional component between the i
 - [Static Pressure Manifold](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
      - 3D Printed Manifold for 4x 0.063in (1/16in) to 1x 0..125in (1/8in) tubing
      - [Scanivalve Pneumatic Manifolds](https://scanivalve.com/products/pneumatic-connectors-and-tubing/pneumatic-manifolds/)
-- PWM Controlled Fan or Blower
-- Arduino Giga R1 WiFi (or compatible MBED-based board)
-     - Note that drivers for the Arduino Giga Display Shield are broken, do not bother buying one.
 - MS4525DO differential pressure sensor (I2C address 0x28)
 - BMP3XX barometric sensor (BMP388/BMP390) (I2C address 0x77 or 0x76)
 - PWM-capable motor or fan
