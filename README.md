@@ -30,6 +30,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 - **Configurable Airspeed Averaging** (default 20)
 - **Ambient Temperature Compensation** (automatic air density correction)
 - **Zero-Offset Calibration** (automatic at startup, manual recalibration at will)
+- **Multi-Bus I2C Scanner** (automatic device discovery on all available I2C buses)
 
 ### Features in Development (Eventually) 
 - Serial free untethered control via Modulino controls and a screen for mobility
@@ -107,6 +108,41 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
    - A default wait time of 30 seconds is set to allow for the airflow in the tunnel to fully stop
    - 50 Samples are taken from the airspeed sensor to establish a zero offset.
    - This routine can be re-run via the `recal` serial command later
+
+---
+
+## I2C Device Scanner
+
+The system includes an automatic I2C device scanner that runs at startup to help verify sensor connections. The scanner automatically detects and scans all available I2C buses on your Arduino board:
+
+- **Classic Arduino (Uno, Nano, Mega)**: Scans Wire only
+- **Arduino Uno Rev4**: Scans Wire and Wire1
+- **Modern Boards (RP2040, ESP32, SAMD21/51)**: Scans Wire and Wire1
+- **Arduino GIGA R1**: Scans Wire, Wire1, and Wire2
+
+### Expected Output
+
+On successful startup, you should see:
+```
+[I2C] Multi-Bus Scanner
+=====================================
+Available I2C buses: 2
+Scanning I2C bus Wire
+ - Found device at 0x28
+ - Found device at 0x77
+ - Total devices found on Wire: 2
+
+Scanning I2C bus Wire1
+ - No I2C devices found on Wire1
+
+[I2C] Scan complete
+=====================================
+```
+
+The MS4525DO pressure sensor should appear at address `0x28`, and the BMP3XX barometer at `0x76` or `0x77`. If devices are not found, check:
+- I2C wiring (SDA/SCL connections)
+- Device power supply
+- Pull-up resistors (typically built into breakout boards)
 
 ---
 
