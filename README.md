@@ -7,11 +7,14 @@ Debugging assitance provided by Antropic Claude Sonnet 4.5 and verified by human
 
 Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/)
 
+[![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
+[![Version](https://img.shields.io/badge/version-1.2-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
 [![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://store-usa.arduino.cc/products/giga-r1-wifi?srsltid=AfmBOop3Aqtaf3BpQPH1OCf3aJT8Pt39YOuv7pEPDY4g7xi1-DEwiopE)
 [![Arduino](https://img.shields.io/badge/Arduino-Mega%202560%20R3-00979D?logo=arduino)](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOopk3fHnK26RSMwzgGKXDylUJ8HzUNyVYfBNoiiwnkMh62EVld_U)
+[![Arduino](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
-[![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
+
+
 
 ---
 
@@ -72,6 +75,15 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
 
 ---
 
+## ⚠️ Safety Warnings
+
+1. **Motor Power**: NEVER power motor from Arduino - use separate supply
+2. **Mechanical**: Secure all components, keep clear of fan during operation
+3. **Testing**: Start with low speeds (2-5 m/s), gradually increase
+4. **Emergency**: Type `0` to stop or disconnect motor/fan from power
+
+---
+
 ### Installation
 
 1. **Install Arduino IDE**
@@ -108,41 +120,6 @@ I2C (SDA/SCL)   → MS4525DO + BMP3XX via Daisy Chained Qwiic Wiring
    - A default wait time of 30 seconds is set to allow for the airflow in the tunnel to fully stop
    - 50 Samples are taken from the airspeed sensor to establish a zero offset.
    - This routine can be re-run via the `recal` serial command later
-
----
-
-## I2C Device Scanner
-
-The system includes an automatic I2C device scanner that runs at startup to help verify sensor connections. The scanner automatically detects and scans all available I2C buses on your Arduino board:
-
-- **Classic Arduino (Uno, Nano, Mega)**: Scans Wire only
-- **Arduino Uno Rev4**: Scans Wire and Wire1
-- **Modern Boards (RP2040, ESP32, SAMD21/51)**: Scans Wire and Wire1
-- **Arduino GIGA R1**: Scans Wire, Wire1, and Wire2
-
-### Expected Output
-
-On successful startup, you should see:
-```
-[I2C] Multi-Bus Scanner
-=====================================
-Available I2C buses: 2
-Scanning I2C bus Wire
- - Found device at 0x28
- - Found device at 0x77
- - Total devices found on Wire: 2
-
-Scanning I2C bus Wire1
- - No I2C devices found on Wire1
-
-[I2C] Scan complete
-=====================================
-```
-
-The MS4525DO pressure sensor should appear at address `0x28`, and the BMP3XX barometer at `0x76` or `0x77`. If devices are not found, check:
-- I2C wiring (SDA/SCL connections)
-- Device power supply
-- Pull-up resistors (typically built into breakout boards)
 
 ---
 
@@ -244,12 +221,38 @@ Once the sketch is compiled and uploaded to the Arduino, it can be controlled vi
 
 ---
 
-## ⚠️ Safety Warnings
+## I2C Device Scanner
 
-1. **Motor Power**: NEVER power motor from Arduino - use separate supply
-2. **Mechanical**: Secure all components, keep clear of fan during operation
-3. **Testing**: Start with low speeds (2-5 m/s), gradually increase
-4. **Emergency**: Type `0` to stop or disconnect motor/fan from power
+The system includes an automatic I2C device scanner that runs at startup to help verify sensor connections. The scanner automatically detects and scans all available I2C buses on your Arduino board:
+
+- **Classic Arduino (Uno, Nano, Mega)**: Scans Wire only
+- **Arduino Uno Rev4**: Scans Wire and Wire1
+- **Modern Boards (RP2040, ESP32, SAMD21/51)**: Scans Wire and Wire1
+- **Arduino GIGA R1**: Scans Wire, Wire1, and Wire2
+
+### Expected Output
+
+On successful startup, you should see:
+```
+[I2C] Multi-Bus Scanner
+=====================================
+Available I2C buses: 2
+Scanning I2C bus Wire
+ - Found device at 0x28
+ - Found device at 0x77
+ - Total devices found on Wire: 2
+
+Scanning I2C bus Wire1
+ - No I2C devices found on Wire1
+
+[I2C] Scan complete
+=====================================
+```
+
+The MS4525DO pressure sensor should appear at address `0x28`, and the BMP3XX barometer at `0x76` or `0x77`. If devices are not found, check:
+- I2C wiring (SDA/SCL connections)
+- Device power supply
+- Pull-up resistors (typically built into breakout boards)
 
 ---
 
