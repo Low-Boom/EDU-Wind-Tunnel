@@ -86,7 +86,11 @@ The wiring configration for control logic and sensors for the Arduino Mega 2560,
 
 ## I2C Wiring and Power Permutations
 
+The primary differennce between the airspeed sensor **requires a 5V power supply** while the BMP390 barometer is compatible with 5V power and the 3.3V Qwiic I2C wiring standard. As such, when using a board like the Arduino Uno R4 with an integrated Qwiic connector, the airspeed sensor must be independently powered from the 5V bus even if the SDA/SCL control signals are daisy chained to the barometer. 
 
+ As of version 1.2, the sketch will automatically determine which bus each sensor is on and connect accordingly so daisy chain or split to your preference. Two example configurations for wiring the I2C connections on the Arduino Uno R4 are shown below.
+
+<img height="600px" src="./img/Uno with Qwiic Chained.jpg" alt="Arduino Uno R4 Daisy Chained" /> <img height="600px" src="./img/Uno with Qwiic Split.jpg" alt="Arduino Uno R4 Split Bus" />
 
  
 ---
