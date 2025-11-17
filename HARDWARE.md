@@ -7,11 +7,11 @@ An updatead version of the test section or an additional component between the i
 ## Required Components
 
 - Arduino or Arduino Compatible MBED microcontroller
-     - (Recommended) [Arduino Mega 2560 Rev. 3](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOooJeuE40gzrgW6OqlN0fd6tiL2gktAr5MX0-S2eOb7eE9hD2HyQ)
+     - [Arduino Uno Rev. 4](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
+     - [Arduino Mega 2560 Rev. 3](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOooJeuE40gzrgW6OqlN0fd6tiL2gktAr5MX0-S2eOb7eE9hD2HyQ)
      - [Arduino Giga R1/R1 Wifi](https://store-usa.arduino.cc/products/giga-r1-wifi?queryID=a518cc78eda98ff33faf6b976f3d470a)
-          - Note that there are several quirks with the Giga that differ from almost every other Arduino board.
-          - Furthermore, the display drivers are very bugged so don't buy a Giga Display Shield and expect it to work.
-          - Because of these things, future versions will depracate the Giga, possibly replacing it with alternatives in addition to the Mega. 
+          - Note, the display drivers are very bugged so don't buy a Giga Display Shield and expect it to work.
+          - Future versions will likely depracate direct support for the Giga and its idiocycracies.
 - [3D Printed Educational Wind Tunnel with Static Pressure Ring](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
 - [Static Pressure Manifold](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
      - 3D Printed Manifold for 4x 0.063in (1/16in) to 1x 0..125in (1/8in) tubing
@@ -46,40 +46,48 @@ An updatead version of the test section or an additional component between the i
 
 ---
 
-## Arduino Pin mapping (defaults used by sketch)
+## Arduino Pin Mapping (defaults used by sketch)
 
+- Serial: USB / Serial Monitor at 115200 baud
 - PWM output: Arduino digital pin 9 → PWM signal input
 - PWM Tachometer input: Arduino digital pin 2 (optional)
-- I2C: SDA / SCL → BMP3XX and MS4525DO (shared bus via Qwiic Daisy Chain)
-- Sensors power: 5V or 3.3V and GND from Arduino
-- Serial: USB / Serial Monitor at 115200 baud
-
-## If Using a 12V PC Fan (Skip if Using AC Infinity Fan)
-
-PC fans uses the 5V PWM standard as outlined in the [PWM White Paper by Noctua](https://cdn.noctua.at/media/Noctua_PWM_specifications_white_paper.pdf). While the Arduino Mega 2560 conforms to this 5V logic level standard, the Arduino Giga R1 uses a 3.3V logic level (for some unfathomable reason). Thus you will need to interpose a bi-directional level logic shifter to ensure full performance.
-
-The [Adafruit 4-channel Bi-Directional Logic Level Converter - BS138](https://www.adafruit.com/product/757) is recommended for this.
-
-The wiring configration for control logic and sensors for the Arduino Mega 2560 and Giga R1 with an externally powered 12V PC Fan are diagramed below.
-
-<img height="600px" src="./img/Mega to 12V Fan Config.jpg" alt="Arduino Mega 2560 and 12V Fan Wiring Configration" /> <img height="600px" src="./img/Giga to 12V Fan Config.jpg" alt="Arduino Giga R1 and 12V Fan Wiring Configration" />
-
+- I2C: SDA / SCL → BMP3XX and MS4525DO
+     - Automatic I2C bus detection (e.g. Wire, Wire1, Wire2).
+     - Sensors can be used on the same or different buses
+	- BMP3XX Barometer supports both 5V and 3.3V power.
+	- MS4525DO Airspeed Sensor ONLY SUPPORTS 5V.
+ 	- See I2C section below for more detail on wiring configuration alternatives
 
 ## If Using the AC Infinity PWM Fans (Skip if Using 12V PC Fan)
 
-AC Infinity uses the a 10V PWM standard while the Arduino Mega 2560 uses 5V PWM logic and the Giga R1 3.3V PWM logic (don't ask my why). Thus you will need to interpose a bi-directional level logic shifter to ensure the AC Infinity blower runs at full performance.
+AC Infinity uses the an industrial 10V PWM standard while the Arduino Mega 2560 and Uno R4 use 5V PWM logic and the Giga R1 3.3V PWM logic (don't ask my why). Thus you will need to interpose a bi-directional level logic shifter to ensure the AC Infinity blower runs at full performance.
 
 The [Adafruit 4-channel Bi-Directional Logic Level Converter - BS138](https://www.adafruit.com/product/757) is recommended for this. For more information on PWM wiring standards, read the [PWM White Paper by Noctua](https://cdn.noctua.at/media/Noctua_PWM_specifications_white_paper.pdf).
 
-The wiring configration for control logic and sensors for the Arduino Mega 2560 and Giga R1 with an AC Infinity fan are diagramed below.
+The wiring configration for control logic and sensors for the Arduino Mega 2560, Giga R1, and Uno R4 with an AC Infinity fan are diagramed below.
 
-<img height="600px" src="./img/Mega to AC Infinity Config.jpg" alt="Arduino Mega 2560 and AC Infinity Fan Wiring Configration" /> <img height="600px" src="./img/Giga to AC Infinity Config.jpg" alt="Arduino Giga R1 and AC Infinity Fan Wiring Configration" />
+<img height="600px" src="./img/Mega to AC Infinity Config.jpg" alt="Arduino Mega 2560 and AC Infinity Fan Wiring Configration" /> <img height="600px" src="./img/Giga to AC Infinity Config.jpg" alt="Arduino Giga R1 and AC Infinity Fan Wiring Configration" /><img height="600px" src="./img/Uno to AC Infinity.jpg" alt="Arduino Uno R4 and AC Infinity Fan Wiring Configration" />
 
 Additionally. You should wire a standard 4-pin fan connector, such as the [Noctua NA-SEC1](https://www.noctua.at/en/products/na-sec1), in place of the AC Infinity UIS USB-C(ish) connector. Connect a corresponding female 4-pin connector to your logic level board. These can be created quickly using a single 4-pin fan extension cabling and a little crimping.
 
 Unscrew the four self tapping screws that secure hatch on the side of the AC Infinity fan to reveal the wiring terminal block. Wire it as noted in the image below. TAC is the fan tachometer feedback, PWM is the control signal.
      
  <img height="600px" src="./img/AC Infinity Wiring.jpg" alt="AC Infinity Terminal Block Wiring" />
+
+## If Using a 12V PC Fan (Skip if Using AC Infinity Fan)
+
+PC fans uses the 5V PWM standard as outlined in the [PWM White Paper by Noctua](https://cdn.noctua.at/media/Noctua_PWM_specifications_white_paper.pdf). While the Arduino Mega 2560 and Uno R4 use 5V logic level standard, the Arduino Giga R1 uses a 3.3V logic level. Thus you will need to interpose a bi-directional level logic shifter to ensure full performance.
+
+The [Adafruit 4-channel Bi-Directional Logic Level Converter - BS138](https://www.adafruit.com/product/757) is recommended for this.
+
+The wiring configration for control logic and sensors for the Arduino Mega 2560, Giga R1, and Uno R4 with an externally powered 12V PC Fan are diagramed below.
+
+<img height="600px" src="./img/Mega to 12V Fan Config.jpg" alt="Arduino Mega 2560 and 12V Fan Wiring Configration" /> <img height="600px" src="./img/Giga to 12V Fan Config.jpg" alt="Arduino Giga R1 and 12V Fan Wiring Configration" /> <img height="600px" src="./img/Uno to 12V Fan Config.jpg" alt="Arduino Uno R4 and 12V Fan Wiring Configration" />
+
+## I2C Wiring and Power Permutations
+
+
+
  
 ---
 
