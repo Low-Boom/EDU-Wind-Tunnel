@@ -70,15 +70,20 @@ void scanAllI2CBuses(Stream &out) {
     out.println();
     
     // Always scan Wire (primary bus)
+    // Note: Wire should already be initialized by caller
     scanSingleBus(&Wire, "Wire", out);
     
     // Scan Wire1 if available (many modern boards)
     #if WIRE_INTERFACES_COUNT > 1
+        // Initialize Wire1 before scanning to prevent hanging
+        Wire1.begin();
         scanSingleBus(&Wire1, "Wire1", out);
     #endif
     
     // Scan Wire2 if available (Arduino GIGA H7)
     #if WIRE_INTERFACES_COUNT > 2
+        // Initialize Wire2 before scanning to prevent hanging
+        Wire2.begin();
         scanSingleBus(&Wire2, "Wire2", out);
     #endif
     
