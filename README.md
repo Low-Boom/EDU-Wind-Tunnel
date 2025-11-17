@@ -1,4 +1,4 @@
-# Educational Wind Tunnel PID Controller
+# Educational Wind Tunnel Controller
 **Arduino-based PID controller for educational wind tunnel systems**
 
 Developed by [Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon
@@ -39,6 +39,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 - Serial free untethered control via Modulino controls and a screen for mobility
 - A [Controllino](https://www.controllino.com) PLC-based version for industrial applications and education
 - A [Mathworks Simulink](https://www.mathworks.com/products/simulink.html) and [Julia Hub DYAD](https://juliahub.com/products/dyad) compatible controller
+- Integrated Lift-Drag Force Balance
 - Coursework materials for wind tunnel operation and design
 
 ---
