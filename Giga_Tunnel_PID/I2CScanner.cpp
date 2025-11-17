@@ -19,7 +19,7 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     // Set timeout to prevent hanging when no devices are connected
     // Modern Arduino Wire libraries support this (GIGA R1, Uno Rev4, etc.)
     #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
-        wire->setWireTimeout(250, true); // 25ms timeout, reset on each call
+        wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
     #endif
     
     int devicesFound = 0;
