@@ -99,6 +99,3 @@ The primary differennce between the airspeed sensor **requires a 5V power supply
         - For mine, the top port was the low-pressure static ring port. Swap if you are getting only 0 m/s speed readings.
 
 ---
-For extended diagnostics see TROUBLESHOOTING.md.
-
----
