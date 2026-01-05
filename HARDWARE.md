@@ -61,7 +61,7 @@ AC Infinity uses the an industrial 10V PWM standard while the Arduino Mega 2560 
 
 The [Adafruit 4-channel Bi-Directional Logic Level Converter - BS138](https://www.adafruit.com/product/757) is recommended for this. For more information on PWM wiring standards, read the [PWM White Paper by Noctua](https://cdn.noctua.at/media/Noctua_PWM_specifications_white_paper.pdf).
 
-The wiring configration for control logic and sensors for the Arduino Mega 2560, Giga R1, and Uno R4 with an AC Infinity fan are diagramed below.
+The wiring configration for control logic and sensors for the Arduino Mega 2560, Giga R1, and Uno R4 with an AC Infinity fan are diagramed below. Note that many third-party Arduino-based boards have different Vin limits than first-party Arudino boards. For example, Adafruit Metro boards max out at 9V. As such, do not power the microcontroller directly from the fan unless you know your particular board can handle 10 Vin. Skip the 10V power connections and use USB power for such boards.
 
 <img height="600px" src="./img/Mega to AC Infinity Config.jpg" alt="Arduino Mega 2560 and AC Infinity Fan Wiring Configration" /> <img height="600px" src="./img/Giga to AC Infinity Config.jpg" alt="Arduino Giga R1 and AC Infinity Fan Wiring Configration" /><img height="600px" src="./img/Uno to AC Infinity.jpg" alt="Arduino Uno R4 and AC Infinity Fan Wiring Configration" />
 
