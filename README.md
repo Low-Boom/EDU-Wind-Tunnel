@@ -16,10 +16,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 [![ESP32](https://img.shields.io/badge/ESP32--S3-Generic-E7352C?logo=espressif)](https://www.espressif.com/en/products/socs/esp32-s3)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-
-
 ---
-
 
 ## Features
 
@@ -49,7 +46,6 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 - **[HARDWARE.md](HARDWARE.md)** - Detailed wiring, components, and power supply info
 - **[TUNING_GUIDE.md](TUNING_GUIDE.md)** - Advanced PID tuning techniques
-- 
 ---
 
 ## Quick Start
