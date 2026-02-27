@@ -29,9 +29,11 @@ struct I2CDeviceInfo {
  * Scan all available I2C buses and report found devices
  * 
  * Automatically detects number of I2C buses using WIRE_INTERFACES_COUNT:
- * - Classic Uno/Nano: Scans Wire only
+ * - Classic Uno/Nano/Mega: Scans Wire only
  * - Arduino Uno Rev4: Scans Wire1, then Wire
- * - RP2040/ESP32/SAMD: Scans Wire1, then Wire
+ * - ESP32 / ESP32-S3 / ESP32-PICO: Scans Wire only (WIRE_INTERFACES_COUNT not
+ *   defined by default; Wire is initialised with explicit SDA/SCL from PlatformConfig.h)
+ * - RP2040/SAMD: Scans Wire1, then Wire
  * - Arduino GIGA (H7): Scans Wire1, Wire2, then Wire
  * 
  * Includes early abort logic to prevent long delays when scanning empty buses:

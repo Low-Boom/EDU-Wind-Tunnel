@@ -32,7 +32,7 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     
     // Set a very short timeout to prevent long delays on empty buses
     // The timeout unit varies by platform, so we use a conservative value
-    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
+    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED) || defined(ARDUINO_ARCH_ESP32)
         wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
     #endif
     
@@ -93,7 +93,7 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     }
     
     // Clear any timeout flags that may have been set during scanning
-    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED)
+    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED) || defined(ARDUINO_ARCH_ESP32)
         wire->clearWireTimeoutFlag();
     #endif
     

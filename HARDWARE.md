@@ -11,7 +11,16 @@ An updatead version of the test section or an additional component between the i
      - [Arduino Mega 2560 Rev. 3](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOooJeuE40gzrgW6OqlN0fd6tiL2gktAr5MX0-S2eOb7eE9hD2HyQ)
      - [Arduino Giga R1/R1 Wifi](https://store-usa.arduino.cc/products/giga-r1-wifi?queryID=a518cc78eda98ff33faf6b976f3d470a)
           - Note, the display drivers are very bugged so don't buy a Giga Display Shield and expect it to work.
-          - Future versions will likely depracate direct support for the Giga and its idiocycracies.
+          - Future versions will likely deprecate direct support for the Giga and its idiosyncrasies.
+- ESP32-based microcontrollers (requires ESP32 Arduino core 2.0+)
+     - [M5 Atom Lite / M5 Atom Stack (ESP32-PICO-D4)](https://shop.m5stack.com/products/atom-lite-esp32-development-kit)
+          - Compact form-factor; sensors attach to the Grove/HY2.0 bottom connector
+          - I2C defaults: SDA = GPIO 26, SCL = GPIO 32 (see `PlatformConfig.h`)
+          - Note: the M5 Atom RGB LED is not a simple digital output; the code uses GPIO 2 as `LED_BUILTIN` fallback
+     - Generic ESP32-S3 dev-boards
+          - I2C defaults: SDA = GPIO 8, SCL = GPIO 9 (see `PlatformConfig.h`)
+     - Any generic ESP32 board (WROOM, WROVER, etc.)
+          - I2C defaults: SDA = GPIO 21, SCL = GPIO 22 (see `PlatformConfig.h`)
 - [3D Printed Educational Wind Tunnel with Static Pressure Ring](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
 - [Static Pressure Manifold](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
      - 3D Printed Manifold for 4x 0.063in (1/16in) to 1x 0..125in (1/8in) tubing
@@ -54,6 +63,51 @@ An updatead version of the test section or an additional component between the i
 	- BMP3XX Barometer supports both 5V and 3.3V power.
 	- MS4525DO Airspeed Sensor ONLY SUPPORTS 5V.
  	- See I2C section below for more detail on wiring configuration alternatives
+
+## ESP32 Pin Mapping (M5 Atom Stack, ESP32-S3, Generic ESP32)
+
+All ESP32 pin defaults are set in `Giga_Tunnel_PID/PlatformConfig.h`.
+Edit that file if your wiring differs.
+
+### M5 Atom Stack / M5 Atom Lite (ESP32-PICO-D4)
+
+| Function        | GPIO | Notes                                    |
+|-----------------|------|------------------------------------------|
+| Serial          | USB  | 115200 baud via USB-C                    |
+| PWM output      |  19  | HAT header or breadboard (change as needed) |
+| Tachometer      |  23  | HAT header or breadboard (change as needed) |
+| I2C SDA         |  26  | Grove / HY2.0 bottom connector           |
+| I2C SCL         |  32  | Grove / HY2.0 bottom connector           |
+
+> **Note** – The MS4525DO airspeed sensor requires 5 V power.  Use the 5 V pin
+> on the Grove connector (pin 2) and ensure your M5 Atom is powered from USB or
+> a 5 V supply.  The BMP3XX barometer also works at 3.3 V if preferred.
+
+### Generic ESP32-S3
+
+| Function        | GPIO | Notes                               |
+|-----------------|------|-------------------------------------|
+| Serial          | USB  | 115200 baud via USB                 |
+| PWM output      |  10  | Any PWM-capable GPIO (change as needed) |
+| Tachometer      |  11  | Any interrupt-capable GPIO (change as needed) |
+| I2C SDA         |   8  | Standard ESP32-S3 dev-board default |
+| I2C SCL         |   9  | Standard ESP32-S3 dev-board default |
+
+### Generic ESP32
+
+| Function        | GPIO | Notes                               |
+|-----------------|------|-------------------------------------|
+| Serial          | USB  | 115200 baud                         |
+| PWM output      |   9  | Any PWM-capable GPIO                |
+| Tachometer      |   2  | Any interrupt-capable GPIO          |
+| I2C SDA         |  21  | Standard ESP32 default              |
+| I2C SCL         |  22  | Standard ESP32 default              |
+
+> **PWM note** – `analogWrite()` on ESP32 (core 2.x+) generates ~1 kHz PWM at
+> 8-bit resolution (0–255), which is compatible with the sketch.  PC fans that
+> strictly require a 25 kHz signal may need an additional LEDC configuration
+> (see Arduino ESP32 `ledcWrite` documentation).  In practice, most fans
+> respond correctly to 1 kHz PWM for speed control purposes.
 
 ## If Using the AC Infinity PWM Fans (Skip if Using 12V PC Fan)
 

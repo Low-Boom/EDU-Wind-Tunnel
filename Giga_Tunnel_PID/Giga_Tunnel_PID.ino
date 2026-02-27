@@ -2,6 +2,9 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+// Platform-specific pin and hardware configuration (ESP32, M5 Atom, classic Arduino)
+#include "PlatformConfig.h"
+
 // Sensor libraries
 #include <Adafruit_Sensor.h>
 #include "Adafruit_BMP3XX.h"
@@ -36,9 +39,9 @@ const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
 // PID gains - Full PID control
 float Kp = 25.0, Ki = 10.0, Kd = 15.0;
 
-// Pin assignments
-const int PWM_pin = 9;    // Motor PWM control output
-const int TACH_pin = 2;   // Tachometer pulse input
+// Pin assignments (platform defaults set in PlatformConfig.h – edit there to change)
+const int PWM_pin  = DEFAULT_PWM_PIN;    // Motor PWM control output
+const int TACH_pin = DEFAULT_TACH_PIN;   // Tachometer pulse input
 const int ENC_PPR = 2;
 const float kI = 1;
 
@@ -174,7 +177,11 @@ void setup() {
 
     // Initialize I2C
     Serial.print("[INIT] I2C bus...");
-    Wire.begin();
+    #if I2C_SDA_PIN >= 0
+        Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);  // ESP32: explicit SDA/SCL
+    #else
+        Wire.begin();                            // Classic Arduino: use board defaults
+    #endif
     Wire.setClock(400000);
     Serial.println(" OK (400kHz)");
     delay(100);
