@@ -9,12 +9,18 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 [![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
 [![Version](https://img.shields.io/badge/version-1.2-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
-[![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://store-usa.arduino.cc/products/giga-r1-wifi?srsltid=AfmBOop3Aqtaf3BpQPH1OCf3aJT8Pt39YOuv7pEPDY4g7xi1-DEwiopE)
-[![Arduino](https://img.shields.io/badge/Arduino-Mega%202560%20R3-00979D?logo=arduino)](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOopk3fHnK26RSMwzgGKXDylUJ8HzUNyVYfBNoiiwnkMh62EVld_U)
-[![Arduino](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
+
+[![ESP32](https://img.shields.io/badge/ESP32--P4-Waveshare-E7352C?logo=espressif)](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)
+[![ESP32](https://img.shields.io/badge/ESP32--P4-M5Stack-E7352C?logo=espressif)](https://shop.m5stack.com/products/m5stack-tab5-iot-development-kit-esp32-p4?srsltid=AfmBOortZshmX320pw43bQy9PAZEDTFahPrh0GdH6Y_72duFPE_Fenuq)
 [![ESP32](https://img.shields.io/badge/ESP32-M5%20Atom%20Stack-E7352C?logo=espressif)](https://shop.m5stack.com/products/atom-lite-esp32-development-kit)
 [![ESP32](https://img.shields.io/badge/ESP32--S3-Generic-E7352C?logo=espressif)](https://www.espressif.com/en/products/socs/esp32-s3)
-[![ESP32](https://img.shields.io/badge/ESP32--P4-Waveshare-E7352C?logo=espressif)](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)
+
+[![Arduino](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
+[![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://store-usa.arduino.cc/products/giga-r1-wifi?srsltid=AfmBOop3Aqtaf3BpQPH1OCf3aJT8Pt39YOuv7pEPDY4g7xi1-DEwiopE)
+[![Arduino](https://img.shields.io/badge/Arduino-Mega%202560%20R3-00979D?logo=arduino)](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOopk3fHnK26RSMwzgGKXDylUJ8HzUNyVYfBNoiiwnkMh62EVld_U)
+
+
+
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
