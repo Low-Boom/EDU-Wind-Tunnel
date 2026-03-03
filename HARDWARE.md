@@ -6,26 +6,21 @@ An updatead version of the test section or an additional component between the i
 
 ## Required Components
 
-- Arduino or Arduino Compatible MBED microcontroller
-     - [Arduino Uno Rev. 4](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
-     - [Arduino Mega 2560 Rev. 3](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOooJeuE40gzrgW6OqlN0fd6tiL2gktAr5MX0-S2eOb7eE9hD2HyQ)
-     - [Arduino Giga R1/R1 Wifi](https://store-usa.arduino.cc/products/giga-r1-wifi?queryID=a518cc78eda98ff33faf6b976f3d470a)
-          - Note, the display drivers are very bugged so don't buy a Giga Display Shield and expect it to work.
-          - Future versions will likely deprecate direct support for the Giga and its idiosyncrasies.
-- ESP32-based microcontrollers (requires ESP32 Arduino core 2.0+)
-     - [M5 Atom Lite / M5 Atom Stack (ESP32-PICO-D4)](https://shop.m5stack.com/products/atom-lite-esp32-development-kit)
-          - Compact form-factor; sensors attach to the Grove/HY2.0 bottom connector
-          - I2C defaults: SDA = GPIO 26, SCL = GPIO 32 (see `PlatformConfig.h`)
-          - Note: the M5 Atom RGB LED is not a simple digital output; the code uses GPIO 2 as `LED_BUILTIN` fallback
-     - Generic ESP32-S3 dev-boards
-          - I2C defaults: SDA = GPIO 8, SCL = GPIO 9 (see `PlatformConfig.h`)
-     - [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm) and other ESP32-P4 dev-boards (requires ESP32 Arduino core 3.x)
-          - Dual-core RISC-V; WiFi 6 via on-board ESP32-C6 companion chip
-          - I2C defaults: SDA = GPIO 7, SCL = GPIO 8 (see `PlatformConfig.h`)
-          - Use GPIOs ≤ 36 to avoid LDO power issues; GPIOs 14-19 are reserved for WiFi SDIO
-     - Any generic ESP32 board (WROOM, WROVER, etc.)
-          - I2C defaults: SDA = GPIO 21, SCL = GPIO 22 (see `PlatformConfig.h`)
-- [3D Printed Educational Wind Tunnel with Static Pressure Ring](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
+- A compatible Arduino or ESP32 Microcontroller
+	- ESP32-based microcontroller (Recommended models linked)
+   		- [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm) and other ESP32-P4 dev-boards (requires ESP32 Arduino core 3.x)
+	          - Dual-core RISC-V; WiFi 6 via on-board ESP32-C6 companion chip
+	     - [M5 Atom Lite / M5 Atom Stack (ESP32-PICO-D4)](https://shop.m5stack.com/products/atom-lite-esp32-development-kit)  (requires ESP32 Arduino core 2.0+)
+	          - Compact form-factor; sensors attach to the Grove/HY2.0 bottom connector
+	     - Generic ESP32-S3 dev-boards  (requires ESP32 Arduino core 2.0+)
+	     - Any generic ESP32 board (WROOM, WROVER, etc.)
+	- Arduino or Arduino Compatible MBED microcontroller
+	     - [Arduino Uno Rev. 4](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
+	     - [Arduino Mega 2560 Rev. 3](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOooJeuE40gzrgW6OqlN0fd6tiL2gktAr5MX0-S2eOb7eE9hD2HyQ)
+	     - [Arduino Giga R1/R1 Wifi](https://store-usa.arduino.cc/products/giga-r1-wifi?queryID=a518cc78eda98ff33faf6b976f3d470a)
+	          - Note, the display drivers are very bugged so don't buy a Giga Display Shield and expect it to work.
+	          - Future versions will deprecate direct support for the Giga and its idiosyncrasies.
+- [3D Printed Educational Wind Tunnel with Static Pressure Ring](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu) Modification
 - [Static Pressure Manifold](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
      - 3D Printed Manifold for 4x 0.063in (1/16in) to 1x 0..125in (1/8in) tubing
      - [Scanivalve Pneumatic Manifolds](https://scanivalve.com/products/pneumatic-connectors-and-tubing/pneumatic-manifolds/)
@@ -68,10 +63,27 @@ An updatead version of the test section or an additional component between the i
 	- MS4525DO Airspeed Sensor ONLY SUPPORTS 5V.
  	- See I2C section below for more detail on wiring configuration alternatives
 
-## ESP32 Pin Mapping (M5 Atom Stack, ESP32-S3, ESP32-P4, Generic ESP32)
+## ESP32 Pin Mapping
 
 All ESP32 pin defaults are set in `Giga_Tunnel_PID/PlatformConfig.h`.
 Edit that file if your wiring differs.
+
+### ESP32-P4 (e.g. Waveshare ESP32-P4-WiFi6-Touch-LCD-7B)
+
+| Function        | GPIO | Notes                               |
+|-----------------|------|-------------------------------------|
+| Serial          | USB  | 115200 baud via USB                 |
+| PWM output      |   6  | Use GPIOs ≤ 36 (change as needed)   |
+| Tachometer      |   5  | Use GPIOs ≤ 36 (change as needed)   |
+| I2C SDA         |   7  | ESP32-P4 default                    |
+| I2C SCL         |   8  | ESP32-P4 default                    |
+
+> **ESP32-P4 notes** – The ESP32-P4 is a dual-core RISC-V chip without built-in
+> WiFi/BT; the Waveshare board pairs it with an ESP32-C6 for WiFi 6.  GPIOs 14-19
+> are reserved for the SDIO host interface to that companion chip — do not
+> reassign them.  Use GPIOs ≤ 36 to avoid LDO power issues on higher-numbered
+> pins.  Requires ESP32 Arduino core **3.x** (select "ESP32P4 Dev Module" in the
+> board manager).
 
 ### M5 Atom Stack / M5 Atom Lite (ESP32-PICO-D4)
 
@@ -97,23 +109,6 @@ Edit that file if your wiring differs.
 | I2C SDA         |   8  | Standard ESP32-S3 dev-board default |
 | I2C SCL         |   9  | Standard ESP32-S3 dev-board default |
 
-### ESP32-P4 (e.g. Waveshare ESP32-P4-WiFi6-Touch-LCD-7B)
-
-| Function        | GPIO | Notes                               |
-|-----------------|------|-------------------------------------|
-| Serial          | USB  | 115200 baud via USB                 |
-| PWM output      |   6  | Use GPIOs ≤ 36 (change as needed)   |
-| Tachometer      |   5  | Use GPIOs ≤ 36 (change as needed)   |
-| I2C SDA         |   7  | ESP32-P4 default                    |
-| I2C SCL         |   8  | ESP32-P4 default                    |
-
-> **ESP32-P4 notes** – The ESP32-P4 is a dual-core RISC-V chip without built-in
-> WiFi/BT; the Waveshare board pairs it with an ESP32-C6 for WiFi 6.  GPIOs 14-19
-> are reserved for the SDIO host interface to that companion chip — do not
-> reassign them.  Use GPIOs ≤ 36 to avoid LDO power issues on higher-numbered
-> pins.  Requires ESP32 Arduino core **3.x** (select "ESP32P4 Dev Module" in the
-> board manager).
-
 ### Generic ESP32
 
 | Function        | GPIO | Notes                               |
@@ -125,10 +120,9 @@ Edit that file if your wiring differs.
 | I2C SCL         |  22  | Standard ESP32 default              |
 
 > **PWM note** – `analogWrite()` on ESP32 (core 2.x+) generates ~1 kHz PWM at
-> 8-bit resolution (0–255), which is compatible with the sketch.  PC fans that
+> 8-bit resolution (0–255), which should be compatible with most fans.  Fans that
 > strictly require a 25 kHz signal may need an additional LEDC configuration
-> (see Arduino ESP32 `ledcWrite` documentation).  In practice, most fans
-> respond correctly to 1 kHz PWM for speed control purposes.
+> (see Arduino ESP32 `ledcWrite` documentation).
 
 ## If Using the AC Infinity PWM Fans (Skip if Using 12V PC Fan)
 
@@ -144,7 +138,9 @@ The wiring configration for control logic and sensors for the Arduino Mega 2560,
 
 Additionally. You should wire a standard 4-pin fan connector, such as the [Noctua NA-SEC1](https://www.noctua.at/en/products/na-sec1), in place of the AC Infinity UIS USB-C(ish) connector. Connect a corresponding female 4-pin connector to your logic level board. These can be created quickly using a single 4-pin fan extension cabling and a little crimping.
 
-Unscrew the four self tapping screws that secure hatch on the side of the AC Infinity fan to reveal the wiring terminal block. Wire it as noted in the image below. TAC is the fan tachometer feedback, PWM is the control signal.
+Unscrew the four self tapping screws that secure hatch on the side of the AC Infinity fan to reveal the wiring terminal block. Wire it as noted in the image below. TAC is the fan tachometer feedback, PWM is the control signal. 
+
+> Note: Some newer AC Infinity models seem to have removed the terminal block pictured however wire color coding appears to be identical. It is recommended that you add in your own terminal block for convenience.
      
  <img height="600px" src="./img/AC Infinity Wiring.jpg" alt="AC Infinity Terminal Block Wiring" />
 
