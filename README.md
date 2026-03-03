@@ -102,7 +102,7 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
      - **sTune** (optional - for advanced PID autotuning)
 
 4. **Upload Code**
-   - Open `Giga_Tunnel_PID.ino`
+   - Open `EDU-Wind-Tunnel.ino`
    - Select Board: "Arduino Giga R1" (Or your Mbed board of choice)
    - Select Port: Your Arduino's COM port
    - Click Upload
@@ -155,7 +155,7 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
   - Duration: ~30-60 seconds depending on system response
   - **Tuning method can be changed** at compile-time (see below)
 
-### Compile-time (edit `Giga_Tunnel_PID.ino`)
+### Compile-time (edit `EDU-Wind-Tunnel.ino`)
 Open the sketch and edit the configuration block near the top:
 
 - **`PlatformConfig.h`** – controls all board-specific pin defaults.  Edit this

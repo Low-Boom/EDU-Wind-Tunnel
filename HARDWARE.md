@@ -65,7 +65,7 @@ An updatead version of the test section or an additional component between the i
 
 ## ESP32 Pin Mapping
 
-All ESP32 pin defaults are set in `Giga_Tunnel_PID/PlatformConfig.h`.
+All ESP32 pin defaults are set in `EDU-Wind-Tunnel/PlatformConfig.h`.
 Edit that file if your wiring differs.
 
 ### ESP32-P4 (e.g. Waveshare ESP32-P4-WiFi6-Touch-LCD-7B)

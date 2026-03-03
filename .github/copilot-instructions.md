@@ -7,8 +7,8 @@ This repository contains an Arduino-based PID controller for educational wind tu
 ## Repository Structure
 
 ```
-Giga_Tunnel_PID/          # Main Arduino sketch folder
-  Giga_Tunnel_PID.ino     # Main sketch: PID loop, relay auto-tune, serial commands
+EDU-Wind-Tunnel/          # Main Arduino sketch folder
+  EDU-Wind-Tunnel.ino     # Main sketch: PID loop, relay auto-tune, serial commands
   I2CScanner.h/.cpp       # Multi-bus I2C scanner utility
   STunePIDTuner.h/.cpp    # sTune-based advanced auto-tuner wrapper
 3D Print Files/           # STL files for hardware components
@@ -45,7 +45,7 @@ README.md                 # Project overview and quick-start guide
 - **I2C auto-discovery** (`I2CScanner`) detects sensor buses at startup; do not hard-code bus assignments.
 - **Serial commands** are single-line strings parsed in the main loop; keep the parser logic inside the sketch's `handleSerialInput()` function.
 - **Board-conditional code** uses `#if defined(...)` guards (e.g., `ARDUINO_GIGA`, `ARDUINO_AVR_MEGA2560`); add new board support with matching guards.
-- **Compile-time constants** (pin assignments, limits, tuning parameters) are defined near the top of `Giga_Tunnel_PID.ino`; runtime-configurable values use `int`/`float` variables that can be changed via serial commands.
+- **Compile-time constants** (pin assignments, limits, tuning parameters) are defined near the top of `EDU-Wind-Tunnel.ino`; runtime-configurable values use `int`/`float` variables that can be changed via serial commands.
 
 ## Code Style
 
@@ -63,7 +63,7 @@ README.md                 # Project overview and quick-start guide
 
 ## Common Tasks
 
-- **Add a new serial command**: Parse the new keyword in `handleSerialInput()` in `Giga_Tunnel_PID.ino`; update the Quick Command Reference table in `README.md`.
-- **Add a new compile-time configuration option**: Declare it as a `const` near the top of `Giga_Tunnel_PID.ino`; document it in the "Compile-time" section of `README.md`.
+- **Add a new serial command**: Parse the new keyword in `handleSerialInput()` in `EDU-Wind-Tunnel.ino`; update the Quick Command Reference table in `README.md`.
+- **Add a new compile-time configuration option**: Declare it as a `const` near the top of `EDU-Wind-Tunnel.ino`; document it in the "Compile-time" section of `README.md`.
 - **Add board support**: Add a `#if defined(BOARD_MACRO)` guard around board-specific pin or bus definitions; document the new board in `HARDWARE.md` and the badge list in `README.md`.
 - **Modify I2C scanning**: Edit `I2CScanner.cpp`; update the header comments in `I2CScanner.h` to reflect any API changes.
