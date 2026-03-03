@@ -8,7 +8,7 @@ An updatead version of the test section or an additional component between the i
 
 - A compatible Arduino or ESP32 Microcontroller
 	- ESP32-based microcontroller (Recommended models linked)
-   		- [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm) and other ESP32-P4 dev-boards (requires ESP32 Arduino core 3.x)
+   		- [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm), [M5Stack Tab5 P4 Board](https://shop.m5stack.com/products/m5stack-tab5-iot-development-kit-esp32-p4?srsltid=AfmBOortZshmX320pw43bQy9PAZEDTFahPrh0GdH6Y_72duFPE_Fenuq), or other ESP32-P4 dev-boards (requires ESP32 Arduino core 3.x)
 	          - Dual-core RISC-V; WiFi 6 via on-board ESP32-C6 companion chip
 	     - [M5 Atom Lite / M5 Atom Stack (ESP32-PICO-D4)](https://shop.m5stack.com/products/atom-lite-esp32-development-kit)  (requires ESP32 Arduino core 2.0+)
 	          - Compact form-factor; sensors attach to the Grove/HY2.0 bottom connector
