@@ -14,6 +14,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 [![Arduino](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
 [![ESP32](https://img.shields.io/badge/ESP32-M5%20Atom%20Stack-E7352C?logo=espressif)](https://shop.m5stack.com/products/atom-lite-esp32-development-kit)
 [![ESP32](https://img.shields.io/badge/ESP32--S3-Generic-E7352C?logo=espressif)](https://www.espressif.com/en/products/socs/esp32-s3)
+[![ESP32](https://img.shields.io/badge/ESP32--P4-Waveshare-E7352C?logo=espressif)](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
@@ -87,8 +88,9 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
    - Open: Tools → Board → Boards Manager
    - Search: "Arduino Mbed OS Giga Boards" (Or your Mbed board of choice)
    - Install latest version
-   - **For ESP32 / M5 Atom Stack / ESP32-S3**: Install "esp32 by Espressif Systems" (version 2.0 or later required)
+   - **For ESP32 / M5 Atom Stack / ESP32-S3 / ESP32-P4**: Install "esp32 by Espressif Systems" (version 2.0 or later required; ESP32-P4 requires version 3.x)
      - M5 Atom users: additionally install the [M5Stack board package](https://docs.m5stack.com/en/arduino/arduino_board) or select a generic ESP32 board and configure `PlatformConfig.h` manually
+     - ESP32-P4 users (e.g. [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)): select "ESP32P4 Dev Module" in the board manager
 
 3. **Install Required Libraries**
    - Open: Tools → Manage Libraries
@@ -160,6 +162,7 @@ Open the sketch and edit the configuration block near the top:
   file if your wiring differs from the defaults:
   - M5 Atom Stack: `DEFAULT_PWM_PIN 19`, `DEFAULT_TACH_PIN 23`, I2C on GPIO 26/32 (Grove)
   - Generic ESP32-S3: `DEFAULT_PWM_PIN 10`, `DEFAULT_TACH_PIN 11`, I2C on GPIO 8/9
+  - ESP32-P4 (Waveshare): `DEFAULT_PWM_PIN 6`, `DEFAULT_TACH_PIN 5`, I2C on GPIO 7/8
   - Generic ESP32: `DEFAULT_PWM_PIN 9`, `DEFAULT_TACH_PIN 2`, I2C on GPIO 21/22
   - Classic Arduino: `DEFAULT_PWM_PIN 9`, `DEFAULT_TACH_PIN 2` (board defaults)
 
@@ -229,7 +232,7 @@ The system includes an automatic I2C device scanner that runs at startup to help
 - **Classic Arduino (Uno, Nano, Mega)**: Scans Wire only
 - **Arduino Uno Rev4**: Scans Wire and Wire1
 - **Modern Boards (RP2040, SAMD21/51)**: Scans Wire and Wire1
-- **ESP32 / ESP32-S3 / ESP32-PICO (M5 Atom)**: Scans Wire only; Wire is initialised with the SDA/SCL pins defined in `PlatformConfig.h`
+- **ESP32 / ESP32-S3 / ESP32-P4 / ESP32-PICO (M5 Atom)**: Scans Wire only; Wire is initialised with the SDA/SCL pins defined in `PlatformConfig.h`
 - **Arduino GIGA R1**: Scans Wire, Wire1, and Wire2
 
 ### Expected Output

@@ -19,6 +19,10 @@ An updatead version of the test section or an additional component between the i
           - Note: the M5 Atom RGB LED is not a simple digital output; the code uses GPIO 2 as `LED_BUILTIN` fallback
      - Generic ESP32-S3 dev-boards
           - I2C defaults: SDA = GPIO 8, SCL = GPIO 9 (see `PlatformConfig.h`)
+     - [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm) and other ESP32-P4 dev-boards (requires ESP32 Arduino core 3.x)
+          - Dual-core RISC-V; WiFi 6 via on-board ESP32-C6 companion chip
+          - I2C defaults: SDA = GPIO 7, SCL = GPIO 8 (see `PlatformConfig.h`)
+          - Use GPIOs ≤ 36 to avoid LDO power issues; GPIOs 14-19 are reserved for WiFi SDIO
      - Any generic ESP32 board (WROOM, WROVER, etc.)
           - I2C defaults: SDA = GPIO 21, SCL = GPIO 22 (see `PlatformConfig.h`)
 - [3D Printed Educational Wind Tunnel with Static Pressure Ring](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
@@ -64,7 +68,7 @@ An updatead version of the test section or an additional component between the i
 	- MS4525DO Airspeed Sensor ONLY SUPPORTS 5V.
  	- See I2C section below for more detail on wiring configuration alternatives
 
-## ESP32 Pin Mapping (M5 Atom Stack, ESP32-S3, Generic ESP32)
+## ESP32 Pin Mapping (M5 Atom Stack, ESP32-S3, ESP32-P4, Generic ESP32)
 
 All ESP32 pin defaults are set in `Giga_Tunnel_PID/PlatformConfig.h`.
 Edit that file if your wiring differs.
@@ -92,6 +96,23 @@ Edit that file if your wiring differs.
 | Tachometer      |  11  | Any interrupt-capable GPIO (change as needed) |
 | I2C SDA         |   8  | Standard ESP32-S3 dev-board default |
 | I2C SCL         |   9  | Standard ESP32-S3 dev-board default |
+
+### ESP32-P4 (e.g. Waveshare ESP32-P4-WiFi6-Touch-LCD-7B)
+
+| Function        | GPIO | Notes                               |
+|-----------------|------|-------------------------------------|
+| Serial          | USB  | 115200 baud via USB                 |
+| PWM output      |   6  | Use GPIOs ≤ 36 (change as needed)   |
+| Tachometer      |   5  | Use GPIOs ≤ 36 (change as needed)   |
+| I2C SDA         |   7  | ESP32-P4 default                    |
+| I2C SCL         |   8  | ESP32-P4 default                    |
+
+> **ESP32-P4 notes** – The ESP32-P4 is a dual-core RISC-V chip without built-in
+> WiFi/BT; the Waveshare board pairs it with an ESP32-C6 for WiFi 6.  GPIOs 14-19
+> are reserved for the SDIO host interface to that companion chip — do not
+> reassign them.  Use GPIOs ≤ 36 to avoid LDO power issues on higher-numbered
+> pins.  Requires ESP32 Arduino core **3.x** (select "ESP32P4 Dev Module" in the
+> board manager).
 
 ### Generic ESP32
 
