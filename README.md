@@ -59,7 +59,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 ### Prerequisites
 - Arduino IDE 2.0+
-- Any Arduino mbed compatible board (Tested on Arduino MEGA 2560 Rev 3 and Giga R1 WiFi board)
+- ESP32 or Arduino microcontroller board (See details on supported boards below). 
 - DFRobot SEN0343 (Fermion LWLP5000) differential pressure sensor (±500 Pa, I2C)
 - DFRobot SEN0665 (Fermion BMP585) barometric pressure/temperature sensor (I2C)
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
