@@ -248,9 +248,8 @@ On successful startup, you should see:
 =====================================
 Available I2C buses: 2
 Scanning I2C bus Wire
- - Found device at 0x28
- - Found device at 0x77
- - Total devices found on Wire: 2
+ - Found device at 0x47
+ - Total devices found on Wire: 1
 
 Scanning I2C bus Wire1
  - No I2C devices found on Wire1
@@ -259,9 +258,12 @@ Scanning I2C bus Wire1
 =====================================
 ```
 
-The MS4525DO pressure sensor should appear at address `0x28`, and the BMP3XX barometer at `0x76` or `0x77`. If devices are not found, check:
+The DFRobot SEN0665 (BMP585) barometer should appear at address `0x47` (or `0x46` if the address jumper is changed).
+The DFRobot SEN0343 (LWLP5000) differential pressure sensor uses I2C address `0x00` (a fixed hardware address) and will **not** appear in the bus scan — it is initialised directly and its absence from the scan is expected and normal.
+
+If the BMP585 is not found, check:
 - I2C wiring (SDA/SCL connections)
-- Device power supply
+- Device power supply (3.3 V)
 - Pull-up resistors (typically built into breakout boards)
 
 ---
@@ -271,8 +273,8 @@ Derived from the Modular Wind Tunnel for STEM Education by Jerrod H. under a Cre
 
 This project uses open-source libraries:
 - QuickPID (MIT License)
-- Adafruit BMP3XX (BSD License)
-- Bolder Flight Systems MS4525DO (MIT License)
+- DFRobot_BMP58X (MIT License) — for DFRobot SEN0665 (BMP585 barometer)
+- DFRobot_LWLP (MIT License) — for DFRobot SEN0343 (LWLP5000 differential pressure sensor)
 - sTune (MIT License) - Optional advanced autotuning library by David Lloyd
 
 See individual library licenses for details.
@@ -292,6 +294,5 @@ This is an initial release so the documentation and best practices are still evo
 - Jerrod H. for the Wind Tunnel Design
 - QuickPID Library by Dlloydev
 - sTune Library by Dlloydev
-- Adafruit for sensor libraries
-- Bolder Flight Systems for MS4525DO library
+- DFRobot for the BMP58X (SEN0665) and LWLP (SEN0343) sensor libraries
 - Arduino community for MBED support

@@ -96,9 +96,9 @@ Edit that file if your wiring differs.
 | I2C SDA         |  26  | Grove / HY2.0 bottom connector           |
 | I2C SCL         |  32  | Grove / HY2.0 bottom connector           |
 
-> **Note** – The MS4525DO airspeed sensor requires 5 V power.  Use the 5 V pin
-> on the Grove connector (pin 2) and ensure your M5 Atom is powered from USB or
-> a 5 V supply.  The BMP3XX barometer also works at 3.3 V if preferred.
+> **Note** – Both the DFRobot SEN0665 (BMP585) barometer and the DFRobot SEN0343
+> (LWLP5000) differential pressure sensor operate at 3.3 V and are compatible
+> with the Grove connector's 3.3 V power rail.
 
 ### Generic ESP32-S3
 
@@ -157,9 +157,9 @@ The wiring configration for control logic and sensors for the Arduino Mega 2560,
 
 ## I2C Wiring and Power Permutations
 
-The primary differennce between the airspeed sensor **requires a 5V power supply** while the BMP390 barometer is compatible with 5V power and the 3.3V Qwiic I2C wiring standard. As such, when using a board like the Arduino Uno R4 with an integrated Qwiic connector, the airspeed sensor must be independently powered from the 5V bus even if the SDA/SCL control signals are daisy chained to the barometer. 
+Both sensors — the DFRobot SEN0343 (LWLP5000) differential pressure sensor and the DFRobot SEN0665 (BMP585) barometer — operate at 3.3 V and are fully compatible with the Qwiic/STEMMA QT I2C wiring standard. The BMP585 is discovered automatically by the I2C bus scanner; the LWLP5000 uses the fixed I2C address `0x00` and is initialised directly on Wire (it will not appear in the bus scan — this is expected). Both sensors can be daisy-chained on the same bus or split across buses.
 
- As of version 1.2, the sketch will automatically determine which bus each sensor is on and connect accordingly so daisy chain or split to your preference. Two example configurations for wiring the I2C connections on the Arduino Uno R4 are shown below.
+As of version 1.2, the sketch will automatically determine which bus the BMP585 is on and connect accordingly. Two example configurations for wiring the I2C connections on the Arduino Uno R4 are shown below.
 
 <img height="600px" src="./img/Uno with Qwiic Chained.jpg" alt="Arduino Uno R4 Daisy Chained" /> <img height="600px" src="./img/Uno with Qwiic Split.jpg" alt="Arduino Uno R4 Split Bus" />
 
@@ -167,9 +167,9 @@ The primary differennce between the airspeed sensor **requires a 5V power supply
 ---
 
 ## Airspeed Sensor Plumbing
-   - MS4525DO high-pressure port ← Exposed to atmosphere away from the tunnel inlet or outlet
-   - MS4525DO low-pressure port ← Test section static pressure ring through the manifold
-   - Note that the orientation of the sensor can change between manufactureres and batches.
-        - For mine, the top port was the low-pressure static ring port. Swap if you are getting only 0 m/s speed readings.
+   - DFRobot SEN0343 (LWLP5000) high-pressure port ← Exposed to atmosphere away from the tunnel inlet or outlet
+   - DFRobot SEN0343 (LWLP5000) low-pressure port ← Test section static pressure ring through the manifold
+   - Note that the port orientation can vary between manufacturers and batches.
+        - Swap the two tubes if you are getting only 0 m/s speed readings.
 
 ---
