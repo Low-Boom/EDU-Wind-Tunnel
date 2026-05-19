@@ -24,8 +24,8 @@ An updatead version of the test section or an additional component between the i
 - [Static Pressure Manifold](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
      - 3D Printed Manifold for 4x 0.063in (1/16in) to 1x 0..125in (1/8in) tubing
      - [Scanivalve Pneumatic Manifolds](https://scanivalve.com/products/pneumatic-connectors-and-tubing/pneumatic-manifolds/)
-- MS4525DO differential pressure sensor (I2C address 0x28)
-- BMP3XX barometric sensor (BMP388/BMP390) (I2C address 0x77 or 0x76)
+- DFRobot SEN0343 (Fermion LWLP5000) differential pressure sensor (±500 Pa, I2C address 0x00)
+- DFRobot SEN0665 (Fermion BMP585) barometric sensor (I2C address 0x47, alt 0x46)
 - PWM-capable motor or fan
      - For Standard 140 mm Wind Tunnel: [Noctua NF-A12x25 G2 PWM](https://www.noctua.at/en/products/nf-a12x25-g2-pwm) with a Noctua [NV-PS1](https://www.noctua.at/en/products/nv-ps1) or [NV-SPH1](https://www.noctua.at/en/products/nv-sph1) Power Supply or similar with the 
      - For Larger 8in/200mm Fann Driven Tunnel: [AC Infinity CLOUDLINE A8, Quiet Inline Fan with Speed Controller](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/)
@@ -56,11 +56,12 @@ An updatead version of the test section or an additional component between the i
 - Serial: USB / Serial Monitor at 115200 baud
 - PWM output: Arduino digital pin 9 → PWM signal input
 - PWM Tachometer input: Arduino digital pin 2 (optional)
-- I2C: SDA / SCL → BMP3XX and MS4525DO
-     - Automatic I2C bus detection (e.g. Wire, Wire1, Wire2).
+- I2C: SDA / SCL → BMP585 (SEN0665) and LWLP5000 (SEN0343)
+     - Automatic I2C bus detection for BMP585 (e.g. Wire, Wire1, Wire2).
+     - LWLP5000 always uses the primary Wire bus (I2C address 0x00 is fixed).
      - Sensors can be used on the same or different buses
-	- BMP3XX Barometer supports both 5V and 3.3V power.
-	- MS4525DO Airspeed Sensor ONLY SUPPORTS 5V.
+	- BMP585 Barometer supports 3.3V power.
+	- LWLP5000 Differential Pressure Sensor supports 3.3V power.
  	- See I2C section below for more detail on wiring configuration alternatives
 
 ## ESP32 Pin Mapping

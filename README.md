@@ -60,8 +60,8 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 ### Prerequisites
 - Arduino IDE 2.0+
 - Any Arduino mbed compatible board (Tested on Arduino MEGA 2560 Rev 3 and Giga R1 WiFi board)
-- Pitot-Static Airspeed Sensor based on a MS4525DO Differential pressure sensor (e.g. [Pixhawk PX4 Flight Controller Comaptible](https://a.co/d/9VPEeWh) )
-- BMP3XX barometric sensor (E.g. [Adafruit BMP390](https://www.adafruit.com/product/4816?srsltid=AfmBOoptmxxHVYD1jurp-CC4qjkaLOoQzmZeBuTtz28D0mF_Nyu4XSE9) )
+- DFRobot SEN0343 (Fermion LWLP5000) differential pressure sensor (±500 Pa, I2C)
+- DFRobot SEN0665 (Fermion BMP585) barometric pressure/temperature sensor (I2C)
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
 - Depending on board and fan combination, a [Bi-Directional Logic Level Lifter](https://www.adafruit.com/product/757?srsltid=AfmBOopBWeXgpfL63fDoCPbWWtu07TIO7QVbofNmTDtQ4QkU7BxYeCWk) with at least two channels
 ---
@@ -101,10 +101,9 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
 3. **Install Required Libraries**
    - Open: Tools → Manage Libraries
    - Install:
-     - Adafruit BMP3XX
-     - Adafruit Unified Sensor
+     - `DFRobot_BMP58X` (for DFRobot SEN0665 barometer) — also requires `DFRobot_RTU`
+     - `DFRobot_LWLP` (for DFRobot SEN0343 differential pressure sensor)
      - QuickPID
-     - Bolder Flight Systems MS4525DO
      - **sTune** (optional - for advanced PID autotuning)
 
 4. **Upload Code**
