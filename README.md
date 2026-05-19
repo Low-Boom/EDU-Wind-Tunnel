@@ -60,8 +60,8 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 ### Prerequisites
 - Arduino IDE 2.0+
 - Any Arduino mbed compatible board (Tested on Arduino MEGA 2560 Rev 3 and Giga R1 WiFi board)
-- Pitot-Static Airspeed Sensor based on a MS4525DO Differential pressure sensor (e.g. [Pixhawk PX4 Flight Controller Comaptible](https://a.co/d/9VPEeWh) )
-- BMP3XX barometric sensor (E.g. [Adafruit BMP390](https://www.adafruit.com/product/4816?srsltid=AfmBOoptmxxHVYD1jurp-CC4qjkaLOoQzmZeBuTtz28D0mF_Nyu4XSE9) )
+- DFRobot SEN0343 (Fermion LWLP5000) differential pressure sensor (±500 Pa, I2C)
+- DFRobot SEN0665 (Fermion BMP585) barometric pressure/temperature sensor (I2C)
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
 - Depending on board and fan combination, a [Bi-Directional Logic Level Lifter](https://www.adafruit.com/product/757?srsltid=AfmBOopBWeXgpfL63fDoCPbWWtu07TIO7QVbofNmTDtQ4QkU7BxYeCWk) with at least two channels
 ---
@@ -101,10 +101,9 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
 3. **Install Required Libraries**
    - Open: Tools → Manage Libraries
    - Install:
-     - Adafruit BMP3XX
-     - Adafruit Unified Sensor
+     - `DFRobot_BMP58X` (for DFRobot SEN0665 barometer) — also requires `DFRobot_RTU`
+     - `DFRobot_LWLP` (for DFRobot SEN0343 differential pressure sensor)
      - QuickPID
-     - Bolder Flight Systems MS4525DO
      - **sTune** (optional - for advanced PID autotuning)
 
 4. **Upload Code**
@@ -249,9 +248,8 @@ On successful startup, you should see:
 =====================================
 Available I2C buses: 2
 Scanning I2C bus Wire
- - Found device at 0x28
- - Found device at 0x77
- - Total devices found on Wire: 2
+ - Found device at 0x47
+ - Total devices found on Wire: 1
 
 Scanning I2C bus Wire1
  - No I2C devices found on Wire1
@@ -260,9 +258,12 @@ Scanning I2C bus Wire1
 =====================================
 ```
 
-The MS4525DO pressure sensor should appear at address `0x28`, and the BMP3XX barometer at `0x76` or `0x77`. If devices are not found, check:
+The DFRobot SEN0665 (BMP585) barometer should appear at address `0x47` (or `0x46` if the address jumper is changed).
+The DFRobot SEN0343 (LWLP5000) differential pressure sensor uses I2C address `0x00` (a fixed hardware address) and will **not** appear in the bus scan — it is initialised directly and its absence from the scan is expected and normal.
+
+If the BMP585 is not found, check:
 - I2C wiring (SDA/SCL connections)
-- Device power supply
+- Device power supply (3.3 V)
 - Pull-up resistors (typically built into breakout boards)
 
 ---
@@ -272,8 +273,8 @@ Derived from the Modular Wind Tunnel for STEM Education by Jerrod H. under a Cre
 
 This project uses open-source libraries:
 - QuickPID (MIT License)
-- Adafruit BMP3XX (BSD License)
-- Bolder Flight Systems MS4525DO (MIT License)
+- DFRobot_BMP58X (MIT License) — for DFRobot SEN0665 (BMP585 barometer)
+- DFRobot_LWLP (MIT License) — for DFRobot SEN0343 (LWLP5000 differential pressure sensor)
 - sTune (MIT License) - Optional advanced autotuning library by David Lloyd
 
 See individual library licenses for details.
@@ -293,6 +294,5 @@ This is an initial release so the documentation and best practices are still evo
 - Jerrod H. for the Wind Tunnel Design
 - QuickPID Library by Dlloydev
 - sTune Library by Dlloydev
-- Adafruit for sensor libraries
-- Bolder Flight Systems for MS4525DO library
+- DFRobot for the BMP58X (SEN0665) and LWLP (SEN0343) sensor libraries
 - Arduino community for MBED support

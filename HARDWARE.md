@@ -24,8 +24,8 @@ An updatead version of the test section or an additional component between the i
 - [Static Pressure Manifold](https://www.printables.com/model/1480487-airspeed-static-pressure-ring-modification-for-edu)
      - 3D Printed Manifold for 4x 0.063in (1/16in) to 1x 0..125in (1/8in) tubing
      - [Scanivalve Pneumatic Manifolds](https://scanivalve.com/products/pneumatic-connectors-and-tubing/pneumatic-manifolds/)
-- MS4525DO differential pressure sensor (I2C address 0x28)
-- BMP3XX barometric sensor (BMP388/BMP390) (I2C address 0x77 or 0x76)
+- DFRobot SEN0343 (Fermion LWLP5000) differential pressure sensor (±500 Pa, I2C address 0x00)
+- DFRobot SEN0665 (Fermion BMP585) barometric sensor (I2C address 0x47, alt 0x46)
 - PWM-capable motor or fan
      - For Standard 140 mm Wind Tunnel: [Noctua NF-A12x25 G2 PWM](https://www.noctua.at/en/products/nf-a12x25-g2-pwm) with a Noctua [NV-PS1](https://www.noctua.at/en/products/nv-ps1) or [NV-SPH1](https://www.noctua.at/en/products/nv-sph1) Power Supply or similar with the 
      - For Larger 8in/200mm Fann Driven Tunnel: [AC Infinity CLOUDLINE A8, Quiet Inline Fan with Speed Controller](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/)
@@ -56,11 +56,12 @@ An updatead version of the test section or an additional component between the i
 - Serial: USB / Serial Monitor at 115200 baud
 - PWM output: Arduino digital pin 9 → PWM signal input
 - PWM Tachometer input: Arduino digital pin 2 (optional)
-- I2C: SDA / SCL → BMP3XX and MS4525DO
-     - Automatic I2C bus detection (e.g. Wire, Wire1, Wire2).
+- I2C: SDA / SCL → BMP585 (SEN0665) and LWLP5000 (SEN0343)
+     - Automatic I2C bus detection for BMP585 (e.g. Wire, Wire1, Wire2).
+     - LWLP5000 always uses the primary Wire bus (I2C address 0x00 is fixed).
      - Sensors can be used on the same or different buses
-	- BMP3XX Barometer supports both 5V and 3.3V power.
-	- MS4525DO Airspeed Sensor ONLY SUPPORTS 5V.
+	- BMP585 Barometer supports 3.3V power.
+	- LWLP5000 Differential Pressure Sensor supports 3.3V power.
  	- See I2C section below for more detail on wiring configuration alternatives
 
 ## ESP32 Pin Mapping
@@ -95,9 +96,9 @@ Edit that file if your wiring differs.
 | I2C SDA         |  26  | Grove / HY2.0 bottom connector           |
 | I2C SCL         |  32  | Grove / HY2.0 bottom connector           |
 
-> **Note** – The MS4525DO airspeed sensor requires 5 V power.  Use the 5 V pin
-> on the Grove connector (pin 2) and ensure your M5 Atom is powered from USB or
-> a 5 V supply.  The BMP3XX barometer also works at 3.3 V if preferred.
+> **Note** – Both the DFRobot SEN0665 (BMP585) barometer and the DFRobot SEN0343
+> (LWLP5000) differential pressure sensor operate at 3.3 V and are compatible
+> with the Grove connector's 3.3 V power rail.
 
 ### Generic ESP32-S3
 
@@ -156,9 +157,9 @@ The wiring configration for control logic and sensors for the Arduino Mega 2560,
 
 ## I2C Wiring and Power Permutations
 
-The primary differennce between the airspeed sensor **requires a 5V power supply** while the BMP390 barometer is compatible with 5V power and the 3.3V Qwiic I2C wiring standard. As such, when using a board like the Arduino Uno R4 with an integrated Qwiic connector, the airspeed sensor must be independently powered from the 5V bus even if the SDA/SCL control signals are daisy chained to the barometer. 
+Both sensors — the DFRobot SEN0343 (LWLP5000) differential pressure sensor and the DFRobot SEN0665 (BMP585) barometer — operate at 3.3 V and are fully compatible with the Qwiic/STEMMA QT I2C wiring standard. The BMP585 is discovered automatically by the I2C bus scanner; the LWLP5000 uses the fixed I2C address `0x00` and is initialised directly on Wire (it will not appear in the bus scan — this is expected). Both sensors can be daisy-chained on the same bus or split across buses.
 
- As of version 1.2, the sketch will automatically determine which bus each sensor is on and connect accordingly so daisy chain or split to your preference. Two example configurations for wiring the I2C connections on the Arduino Uno R4 are shown below.
+As of version 1.2, the sketch will automatically determine which bus the BMP585 is on and connect accordingly. Two example configurations for wiring the I2C connections on the Arduino Uno R4 are shown below.
 
 <img height="600px" src="./img/Uno with Qwiic Chained.jpg" alt="Arduino Uno R4 Daisy Chained" /> <img height="600px" src="./img/Uno with Qwiic Split.jpg" alt="Arduino Uno R4 Split Bus" />
 
@@ -166,9 +167,9 @@ The primary differennce between the airspeed sensor **requires a 5V power supply
 ---
 
 ## Airspeed Sensor Plumbing
-   - MS4525DO high-pressure port ← Exposed to atmosphere away from the tunnel inlet or outlet
-   - MS4525DO low-pressure port ← Test section static pressure ring through the manifold
-   - Note that the orientation of the sensor can change between manufactureres and batches.
-        - For mine, the top port was the low-pressure static ring port. Swap if you are getting only 0 m/s speed readings.
+   - DFRobot SEN0343 (LWLP5000) high-pressure port ← Exposed to atmosphere away from the tunnel inlet or outlet
+   - DFRobot SEN0343 (LWLP5000) low-pressure port ← Test section static pressure ring through the manifold
+   - Note that the port orientation can vary between manufacturers and batches.
+        - Swap the two tubes if you are getting only 0 m/s speed readings.
 
 ---

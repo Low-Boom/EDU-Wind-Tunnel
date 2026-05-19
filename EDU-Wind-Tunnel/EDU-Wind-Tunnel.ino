@@ -6,10 +6,9 @@
 #include "PlatformConfig.h"
 
 // Sensor libraries
-#include <Adafruit_Sensor.h>
-#include "Adafruit_BMP3XX.h"
+#include "DFRobot_BMP58X.h"
+#include <DFRobot_LWLP.h>
 #include <QuickPID.h>
-#include "ms4525do.h"
 #include "math.h"
 
 // sTune library and wrapper (optional - for advanced autotuning)
@@ -33,8 +32,8 @@ const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
 // #include "mbed.h"
 
 #define SEALEVELPRESSURE_HPA (1013.25)
-#define DPS_ADDRESS 0x28
-#define BMP_I2C_ADDRESS 0x77
+#define DPS_ADDRESS 0x00   // DFRobot LWLP5000 (SEN0343) — fixed I2C address
+#define BMP_I2C_ADDRESS 0x47  // DFRobot BMP585 (SEN0665) — default I2C address (alt: 0x46)
 
 // PID gains - Full PID control
 float Kp = 25.0, Ki = 10.0, Kd = 15.0;
@@ -147,8 +146,8 @@ void runSTune();
 
 QuickPID myPID(&currentAirSpeed, &currPWM, &desiredAirSpeed);
 
-bfs::Ms4525do pres;
-Adafruit_BMP3XX bmp;
+DFRobot_LWLP lwlp;
+DFRobot_BMP58X_I2C *bmp58x = nullptr;
 
 volatile unsigned long LastPulseTime = 0;
 volatile unsigned long PulseInterval = 0;
@@ -164,6 +163,7 @@ void setup() {
     Serial.println("\n\n");
     Serial.println("=====================================");
     Serial.println("   EDU Wind Tunnel PID Controller v1.1");
+    Serial.println("   Sensors: DFRobot SEN0665 (BMP585) + SEN0343 (LWLP5000)");
     Serial.println("   Build: 2025-11-09 00:08:20 UTC");
     Serial.println("   User: Low-Boom");
     Serial.println("=====================================");
@@ -189,32 +189,14 @@ void setup() {
     // Scan all I2C buses for connected devices
     scanAllI2CBuses(Serial);
     
-    // Configure pressure sensor (MS4525DO at 0x28)
-    // Automatically detect which bus it's on from the scan results
-    const char* dpsBusName = nullptr;
-    TwoWire* dpsBus = getDeviceBus(DPS_ADDRESS, &dpsBusName);
-    
-    Serial.print("[INIT] MS4525DO pressure sensor...");
-    if (dpsBus == nullptr) {
-        Serial.println(" NOT FOUND!");
-        Serial.print("[ERROR] No device at I2C address 0x");
-        Serial.print(DPS_ADDRESS, HEX);
-        Serial.println(" on any bus");
-        Serial.println("[ERROR] Check sensor connections");
-        while (1) {
-            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-            delay(200);
-        }
-    }
-    
-    Serial.print(" (found on "); Serial.print(dpsBusName); Serial.print(")");
-    pres.Config(dpsBus, DPS_ADDRESS, 1.0f, -1.0f);
-    
-    if (!pres.Begin()) {
+    // Configure differential pressure sensor (DFRobot SEN0343 / LWLP5000)
+    // The LWLP5000 uses I2C address 0x00 (fixed), which is not scanned by the
+    // standard I2C bus scanner.  Initialize it directly on Wire.
+    Serial.print("[INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)...");
+    if (lwlp.begin() != 0) {
         Serial.println(" FAILED!");
-        Serial.println("[ERROR] Cannot communicate with pressure sensor");
-        Serial.print("[ERROR] Check I2C address 0x28 on ");
-        Serial.println(dpsBusName);
+        Serial.println("[ERROR] Cannot communicate with differential pressure sensor");
+        Serial.println("[ERROR] Check SEN0343 connections to Wire (SDA/SCL)");
         while (1) {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
             delay(200);
@@ -807,13 +789,15 @@ void calibratePressureSensor(bool skipWait, int numSamples) {
 }
 
 float readBarometerSensor() { 
-    if (!bmp.performReading()) {
+    float temp_c = bmp58x->readTempC();
+    float temp_k = temp_c + 273.15;
+    float pressure_pa = bmp58x->readPressPa();
+    
+    // Sanity-check: fall back to cached values on implausible readings
+    if (temp_k < 173.15 || temp_k > 373.15 || pressure_pa < 50000.0 || pressure_pa > 120000.0) {
         return lastAirDensity;
     }
     
-    float temp_c = bmp.temperature;
-    float temp_k = temp_c + 273.15;
-    float pressure_pa = bmp.pressure;
     float density = pressure_pa / (Specific_gas_constant * temp_k);
     
     lastAirDensity = density;
@@ -823,29 +807,22 @@ float readBarometerSensor() {
 }
 
 float readPressureSensorRawUncalibrated() {
-    float pressure = 0.0;
-    
-    if (pres.Read()) {
-        pressure = pres.pres_pa();
-        if (pressure < 0.0) pressure = 0.0;
-    }
-    
+    DFRobot_LWLP::sLwlp_t data = lwlp.getData();
+    // "presure" is the correct field name (library spelling)
+    float pressure = data.presure;
+    if (pressure < 0.0) pressure = 0.0;
     return pressure;
 }
 
 float readPressureSensorRaw() { 
-    float pressure = 0.0;
+    DFRobot_LWLP::sLwlp_t data = lwlp.getData();
+    float pressure = data.presure;
     
-    if (pres.Read()) {
-        pressure = pres.pres_pa();
-        
-        if (calibrated) {
-            pressure -= pressureOffset;
-        }
-        
-        if (pressure < 0.0) pressure = 0.0;
+    if (calibrated) {
+        pressure -= pressureOffset;
     }
     
+    if (pressure < 0.0) pressure = 0.0;
     return pressure;
 }
 
@@ -1059,21 +1036,21 @@ void OnTachPulse() {
 }
 
 void initializeBarometer() { 
-    Serial.print("[INIT] BMP3XX barometer (I2C)...");
+    Serial.print("[INIT] BMP585 barometer (DFRobot SEN0665)...");
     
-    // Try to find BMP3XX on any bus - check both common addresses
+    // Try to find BMP585 on any bus — check default address 0x47 then alternate 0x46
     const char* bmpBusName = nullptr;
     TwoWire* bmpBus = getDeviceBus(BMP_I2C_ADDRESS, &bmpBusName);
     
     if (bmpBus == nullptr) {
         // Try alternate address
-        bmpBus = getDeviceBus(0x76, &bmpBusName);
+        bmpBus = getDeviceBus(0x46, &bmpBusName);
     }
     
     if (bmpBus == nullptr) {
         Serial.println(" NOT FOUND!");
-        Serial.println("[ERROR] BMP3 not found at 0x76 or 0x77 on any bus");
-        Serial.println("[ERROR] Check sensor connections");
+        Serial.println("[ERROR] BMP585 not found at 0x47 or 0x46 on any bus");
+        Serial.println("[ERROR] Check SEN0665 sensor connections");
         while (1) {
             digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
             delay(500);
@@ -1082,11 +1059,17 @@ void initializeBarometer() {
     
     Serial.print(" (found on "); Serial.print(bmpBusName); Serial.print(")");
     
-    if (!bmp.begin_I2C(BMP_I2C_ADDRESS, bmpBus)) {
-        Serial.println(" trying 0x76...");
-        if (!bmp.begin_I2C(0x76, bmpBus)) {
+    uint8_t bmpAddr = BMP_I2C_ADDRESS;
+    bmp58x = new DFRobot_BMP58X_I2C(bmpBus, bmpAddr);
+    
+    if (!bmp58x->begin()) {
+        // Try alternate address
+        delete bmp58x;
+        bmpAddr = 0x46;
+        bmp58x = new DFRobot_BMP58X_I2C(bmpBus, bmpAddr);
+        if (!bmp58x->begin()) {
             Serial.println(" FAILED!");
-            Serial.println("[ERROR] BMP3 found in scan but cannot initialize");
+            Serial.println("[ERROR] BMP585 found in scan but cannot initialize");
             Serial.print("[ERROR] Check connections on ");
             Serial.println(bmpBusName);
             while (1) {
@@ -1094,19 +1077,18 @@ void initializeBarometer() {
                 delay(500);
             }
         }
-        Serial.println(" OK (0x76)");
+        Serial.println(" OK (0x46)");
     } else {
-        Serial.println(" OK (0x77)");
+        Serial.print(" OK (0x"); Serial.print(bmpAddr, HEX); Serial.println(")");
     }
     
-    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
-    bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
-    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
-    bmp.setOutputDataRate(BMP3_ODR_50_HZ);
+    bmp58x->setMeasureMode(bmp58x->eNormal);
     
-    if (bmp.performReading()) {
-        Serial.print("        T:"); Serial.print(bmp.temperature, 1); Serial.print("°C ");
-        Serial.print("P:"); Serial.print(bmp.pressure/100.0, 1); Serial.println("hPa");
+    float tempC = bmp58x->readTempC();
+    float pressPa = bmp58x->readPressPa();
+    if (pressPa > 50000.0) {
+        Serial.print("        T:"); Serial.print(tempC, 1); Serial.print("°C ");
+        Serial.print("P:"); Serial.print(pressPa / 100.0, 1); Serial.println("hPa");
         Serial.println("        Temperature compensation: ENABLED");
     }
     delay(100);
