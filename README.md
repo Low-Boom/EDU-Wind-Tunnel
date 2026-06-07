@@ -58,8 +58,8 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 ## Quick Start
 
 ### Prerequisites
-- Arduino IDE 2.0+
-- ESP32 or Arduino microcontroller board (See details on supported boards below). 
+- Arduino IDE 2.0+ or [VSCode with PlatformIO](https://platformio.org/install/ide?install=vscode) (see Installation notes)
+- ESP32-P4 microcontroller board (primary/recommended; see [HARDWARE.md](HARDWARE.md) for all supported boards)
 - DFRobot SEN0343 (Fermion LWLP5000) differential pressure sensor (±500 Pa, I2C)
 - DFRobot SEN0665 (Fermion BMP585) barometric pressure/temperature sensor (I2C)
 - PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
@@ -68,7 +68,7 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 ## Hardware Setup
 
-⚠️ Motor power supply must be separate from Arduino! This is 120V AC Power for the AC Infinity Fan or a 12V power supply for the 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
+⚠️ Motor power supply must be separate from the microcontroller! This is 120V AC Power for the AC Infinity Fan or a 12V power supply for the 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
 
 See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specifications.
 
@@ -76,7 +76,7 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
 
 ## ⚠️ Safety Warnings
 
-1. **Motor Power**: NEVER power motor from Arduino - use separate supply
+1. **Motor Power**: NEVER power motor from the microcontroller - use separate supply
 2. **Mechanical**: Secure all components, keep clear of fan during operation
 3. **Testing**: Start with low speeds (2-5 m/s), gradually increase
 4. **Emergency**: Type `0` to stop or disconnect motor/fan from power
@@ -85,18 +85,16 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
 
 ### Installation
 
-1. **Install Arduino IDE**
-   ```
-   Download from: https://www.arduino.cc/en/software
-   ```
+1. **Install IDE**
+   - **Arduino IDE** (recommended for beginners): Download from https://www.arduino.cc/en/software
+   - **VSCode + PlatformIO** (alternative, recommended for advanced users): Install [VSCode](https://code.visualstudio.com/) then add the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode). PlatformIO handles board packages and libraries automatically.
 
-2. **Install Board Support**
+2. **Install Board Support** (Arduino IDE only; PlatformIO manages this automatically)
    - Open: Tools → Board → Boards Manager
-   - Search: "Arduino Mbed OS Giga Boards" (Or your Mbed board of choice)
-   - Install latest version
-   - **For ESP32 / M5 Atom Stack / ESP32-S3 / ESP32-P4**: Install "esp32 by Espressif Systems" (version 2.0 or later required; ESP32-P4 requires version 3.x)
-     - M5 Atom users: additionally install the [M5Stack board package](https://docs.m5stack.com/en/arduino/arduino_board) or select a generic ESP32 board and configure `PlatformConfig.h` manually
-     - ESP32-P4 users (e.g. [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)): select "ESP32P4 Dev Module" in the board manager
+   - Search: "esp32 by Espressif Systems" and install version **3.x** (required for ESP32-P4)
+     - Select "ESP32P4 Dev Module" for ESP32-P4 boards (e.g. [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm))
+     - M5 Atom users: version 2.0+ is sufficient; additionally install the [M5Stack board package](https://docs.m5stack.com/en/arduino/arduino_board) or select a generic ESP32 board and configure `PlatformConfig.h` manually
+   - For Arduino/Mbed boards: search for the appropriate Mbed OS board package (e.g. "Arduino Mbed OS Giga Boards")
 
 3. **Install Required Libraries**
    - Open: Tools → Manage Libraries
@@ -108,8 +106,8 @@ See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specif
 
 4. **Upload Code**
    - Open `EDU-Wind-Tunnel.ino`
-   - Select Board: "Arduino Giga R1" (Or your Mbed board of choice)
-   - Select Port: Your Arduino's COM port
+   - Select Board: "ESP32P4 Dev Module" (or your specific board)
+   - Select Port: Your board's COM port
    - Click Upload
 
 5. **Open Serial Monitor**
@@ -220,9 +218,9 @@ elapsed time | airspeed (m/s) | target (m/s) | PWM (0–255) | differential pres
 
 ## Serial Control from Android
 
-Once the sketch is compiled and uploaded to the Arduino, it can be controlled via a USB connection to an android phone using the excellent [Serial USB Terminal App by Kair Morichi](https://www.kai-morich.de/android/).
+Once the sketch is compiled and uploaded, it can be controlled via a USB connection to an Android phone using the excellent [Serial USB Terminal App by Kair Morichi](https://www.kai-morich.de/android/).
 
-1. Connect via a USB cable with whatever adapters or USB-C hubs are required for your particular phone and Arduino. A direct USB-C to USB-C cable will work for the Arduino Giga. 
+1. Connect via a USB cable with whatever adapters or USB-C hubs are required for your particular phone and board.
 
 2. Set the Baud Rate to 115200 and operate as you would from the Arduino IDE
 
@@ -232,12 +230,12 @@ Once the sketch is compiled and uploaded to the Arduino, it can be controlled vi
 
 ## I2C Device Scanner
 
-The system includes an automatic I2C device scanner that runs at startup to help verify sensor connections. The scanner automatically detects and scans all available I2C buses on your Arduino board:
+The system includes an automatic I2C device scanner that runs at startup to help verify sensor connections. The scanner automatically detects and scans all available I2C buses on your board:
 
+- **ESP32 / ESP32-S3 / ESP32-P4 / ESP32-PICO (M5 Atom)**: Scans Wire only; Wire is initialised with the SDA/SCL pins defined in `PlatformConfig.h`
 - **Classic Arduino (Uno, Nano, Mega)**: Scans Wire only
 - **Arduino Uno Rev4**: Scans Wire and Wire1
 - **Modern Boards (RP2040, SAMD21/51)**: Scans Wire and Wire1
-- **ESP32 / ESP32-S3 / ESP32-P4 / ESP32-PICO (M5 Atom)**: Scans Wire only; Wire is initialised with the SDA/SCL pins defined in `PlatformConfig.h`
 - **Arduino GIGA R1**: Scans Wire, Wire1, and Wire2
 
 ### Expected Output
@@ -295,4 +293,4 @@ This is an initial release so the documentation and best practices are still evo
 - QuickPID Library by Dlloydev
 - sTune Library by Dlloydev
 - DFRobot for the BMP58X (SEN0665) and LWLP (SEN0343) sensor libraries
-- Arduino community for MBED support
+- Arduino and Espressif communities for board and library support
