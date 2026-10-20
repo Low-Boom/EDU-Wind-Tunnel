@@ -8,9 +8,13 @@
  */
 
 #include "STunePIDTuner.h"
+#include <new>      // placement new
+#include <string.h> // memset
+#include <math.h>   // INFINITY
 
 STunePIDTuner::STunePIDTuner(float *input, float *output, sTune::TuningMethod tuningMethod)
-    : _input(input),
+    : _tuner(nullptr),
+      _input(input),
       _output(output),
       _setpoint(0.0),
       _status(IDLE),
@@ -29,19 +33,32 @@ STunePIDTuner::STunePIDTuner(float *input, float *output, sTune::TuningMethod tu
       _settleTimeSec(5),
       _samples(300),
       _eStop(0.0) {
-    
-    // Create sTune instance with selected tuning method. Its constructor
-    // writes an uninitialised start value to *output, so keep the caller's.
-    float savedOutput = *output;
-    _tuner = new sTune(input, output, _tuningMethod, sTune::directIP, sTune::printSUMMARY);
-    *output = savedOutput;
+    createTuner();
 }
 
 STunePIDTuner::~STunePIDTuner() {
     if (_tuner != nullptr) {
-        delete _tuner;
+        _tuner->~sTune();
         _tuner = nullptr;
     }
+}
+
+// Build a new sTune object in zero-filled storage, so nothing is left over
+// from an earlier run or from old RAM contents: pvInst starts at 0 and the
+// emergency-stop latch (eStopAbort) is clear. Called for every run.
+void STunePIDTuner::createTuner() {
+    float savedOutput = *_output;   // the constructor writes *output; keep the caller's
+    if (_tuner != nullptr) {
+        _tuner->~sTune();
+    }
+    memset(_tunerStorage, 0, sizeof(_tunerStorage));
+    // Compiler barrier: the zero fill must really be written before the
+    // constructor runs (GCC's -flifetime-dse may otherwise drop stores to an
+    // object's storage that happen before its constructor).
+    __asm__ __volatile__("" : : "r"(_tunerStorage) : "memory");
+    _tuner = new (_tunerStorage) sTune(_input, _output, _tuningMethod,
+                                       sTune::directIP, sTune::printSUMMARY);
+    *_output = savedOutput;
 }
 
 bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpan,
@@ -71,13 +88,24 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     _ki = 0.0;
     _kd = 0.0;
     
-    // Configure sTune. Configure() resets the emergency stop to inputSpan,
-    // so apply the user's limit again afterwards.
+    // Fresh sTune object for this run, then configure it.
+    // Memory: Configure() -> sTan::begin() allocates a new float[samples * 0.06]
+    // buffer for the sliding tangent on every call and never frees the old
+    // one (4 * 18 = 72 bytes of heap per sTune run with 300 samples). The
+    // buffer belongs to the global sTan object in sTune.cpp, not to the sTune
+    // object, so the wrapper cannot free it without changing the library.
+    // Configure() is called exactly once per run.
+    createTuner();
     _tuner->Configure(inputSpan, outputSpan, outputStart, outputStep, 
                       testTimeSec, settleTimeSec, samples);
-    if (_eStop > 0.0) {
-        _tuner->SetEmergencyStop(_eStop);
-    }
+    // Configure() starts with Reset(), which writes the old start value (0 in
+    // a new object) to *output; the fan must hold outputStart instead.
+    *_output = outputStart;
+    // The emergency stop is checked in update(). sTune's own check is turned
+    // off (an infinite limit can never trip), because it latches for the
+    // life of the object, holds the output at outputStart without telling
+    // the caller, and leaves the run to end only by the timeout.
+    _tuner->SetEmergencyStop(INFINITY);
     
     // Calculate timeout: settle time + test time + 50% margin
     _timeout = (settleTimeSec + testTimeSec) * 1500; // milliseconds
@@ -120,6 +148,17 @@ STunePIDTuner::TuningStatus STunePIDTuner::update() {
             _status = TIMEOUT;
             return _status;
         }
+    }
+
+    // Emergency stop: input above the limit during a run ends it with ERROR,
+    // so the caller stops the fan at once.
+    float eStopLimit = (_eStop > 0.0) ? _eStop : _inputSpan;
+    if ((_status == SETTLING || _status == TESTING) && *_input > eStopLimit) {
+        Serial.print("\n[sTune] ABORT: airspeed "); Serial.print(*_input, 2);
+        Serial.print(" m/s above the limit of "); Serial.print(eStopLimit, 2);
+        Serial.println(" m/s");
+        _status = ERROR;
+        return _status;
     }
 
     // sTune returns "sample" while settling too, so the switch to TESTING is
@@ -213,10 +252,7 @@ const char* STunePIDTuner::getStatusString() const {
 }
 
 void STunePIDTuner::setEmergencyStop(float limit) {
-    _eStop = limit;   // remembered: startTuning() re-applies it after Configure()
-    if (_tuner != nullptr) {
-        _tuner->SetEmergencyStop(limit);
-    }
+    _eStop = limit;   // checked in update(); 0 = use the run's inputSpan
 }
 
 void STunePIDTuner::printResults() {

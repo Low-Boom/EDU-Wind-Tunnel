@@ -40,6 +40,10 @@ public:
      */
     ~STunePIDTuner();
 
+    // Not copyable: _tuner points into this object's own storage.
+    STunePIDTuner(const STunePIDTuner &) = delete;
+    STunePIDTuner &operator=(const STunePIDTuner &) = delete;
+
     /**
      * Configure and start tuning process
      * @param setpoint Target airspeed for tuning
@@ -96,8 +100,11 @@ public:
     const char* getStatusString() const;
 
     /**
-     * Set emergency stop temperature/speed limit
-     * @param limit Maximum safe value
+     * Set the emergency stop limit (airspeed). If the input exceeds it during
+     * a run, update() returns ERROR so the caller can stop the fan. The check
+     * is done here, not by sTune: sTune's own check latches for the life of
+     * the object and only resets its output to outputStart.
+     * @param limit Maximum safe value (0 = inputSpan of the run)
      */
     void setEmergencyStop(float limit);
 
@@ -126,7 +133,15 @@ public:
     float getTau() const;
 
 private:
-    sTune *_tuner;              // sTune instance
+    // sTune 2.4.0 leaves members uninitialised (pvInst is compared with the
+    // emergency stop on the first Run(); _outputStart is written to *output)
+    // and never clears its emergency-stop latch. So each run gets a new sTune
+    // object built in zero-filled storage inside this wrapper (no separate
+    // heap block).
+    void createTuner();
+
+    alignas(sTune) unsigned char _tunerStorage[sizeof(sTune)];
+    sTune *_tuner;              // sTune instance (lives in _tunerStorage)
     float *_input;              // Pointer to input variable
     float *_output;             // Pointer to output variable
     float _setpoint;            // Target setpoint for tuning
@@ -145,7 +160,7 @@ private:
     uint32_t _testTimeSec;
     uint32_t _settleTimeSec;
     uint16_t _samples;
-    float _eStop;               // emergency stop limit (0 = sTune default: inputSpan)
+    float _eStop;               // emergency stop limit (0 = inputSpan of the run)
 };
 
 #endif // STUNE_PID_TUNER_H
