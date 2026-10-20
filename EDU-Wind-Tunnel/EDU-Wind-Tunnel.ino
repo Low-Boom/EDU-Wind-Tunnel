@@ -636,7 +636,7 @@ void runRelayTune() {
         controlMode = MODE_PID;
         desiredAirSpeed = tuneSetpoint;
         lastPWMOutput = 0;
-        myPID.Reset();
+        pidBumplessStart();
     }
     
     // Timeout after 120 seconds
@@ -659,6 +659,8 @@ void runRelayTune() {
         controlMode = MODE_PID;
         currPWM = 0;
         analogWrite(PWM_pin, 0);
+        lastPWMOutput = 0;
+        pidBumplessStart();
     }
 }
 
@@ -978,8 +980,10 @@ void setTargetAirspeed(float target) {
         Serial.print("[WARN] Capping at "); Serial.print(MAX_AIRSPEED); Serial.println(" m/s");
         target = MAX_AIRSPEED;
     }
+    // Only the setpoint changes. The PID keeps its integral, so the fan moves
+    // smoothly from its present PWM (Reset() would zero the integral and drop
+    // the output to about 0 first).
     desiredAirSpeed = target;
-    myPID.Reset();
     Serial.print("[SERIAL] New target: "); Serial.print(desiredAirSpeed, 2); Serial.println(" m/s");
 }
 
@@ -998,14 +1002,13 @@ void setManualGains(const char *kpText, const char *kiText, const char *kdText) 
     Ki = constrain(newKi, 0.1, 50.0);
     Kd = constrain(newKd, 0.1, 50.0);
 
-    myPID.SetTunings(Kp, Ki, Kd);
-    myPID.Reset();
+    myPID.SetTunings(Kp, Ki, Kd);   // takes effect on the next Compute(), no bump
 
     Serial.println("\n[PID] Manual PID gains set:");
     Serial.print("      Kp = "); Serial.println(Kp, 4);
     Serial.print("      Ki = "); Serial.println(Ki, 4);
     Serial.print("      Kd = "); Serial.println(Kd, 4);
-    Serial.println("      PID controller reset and ready\n");
+    Serial.println("      Applied to the running controller\n");
 }
 
 // Stop the fan now and leave the PID idle at zero output and zero target.
@@ -1176,7 +1179,6 @@ void runSTune() {
             Kd = newKd;
             
             myPID.SetTunings(Kp, Ki, Kd);
-            myPID.Reset();
             
             Serial.println("[sTune] Gains applied to PID controller");
             Serial.println("[sTune] Resuming normal operation");
@@ -1188,6 +1190,7 @@ void runSTune() {
         controlMode = MODE_PID;
         sTuner->reset();
         lastPWMOutput = 0;
+        pidBumplessStart();
         
     } else if (status == STunePIDTuner::TIMEOUT || status == STunePIDTuner::ERROR) {
         Serial.println("[sTune] Tuning failed - keeping previous gains");
@@ -1200,6 +1203,7 @@ void runSTune() {
         currPWM = 0;
         analogWrite(PWM_pin, 0);
         lastPWMOutput = 0;
+        pidBumplessStart();
     }
 }
 
