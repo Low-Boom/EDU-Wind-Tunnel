@@ -90,8 +90,12 @@ const unsigned long RELAY_TIMEOUT_MS = 120000;
 // PI versions: ZN_PI, DampedOsc_PI, NoOvershoot_PI, CohenCoon_PI, Mixed_PI
 const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
 const uint32_t STUNE_TEST_TIME_S = 60;
-const uint32_t STUNE_SETTLE_TIME_S = 5;
 const uint16_t STUNE_SAMPLES = 300;      // 60 s / 300 = one sample per 200 ms
+// The step goes from STUNE_START_FRACTION x step PWM to the step PWM. The fan
+// holds the start PWM for STUNE_SETTLE_TIME_S first, long enough to reach it
+// from any earlier state (also from full speed: fans run down slowly).
+const float STUNE_START_FRACTION = 0.6;
+const uint32_t STUNE_SETTLE_TIME_S = 25;
 
 // Sensors
 const uint8_t BMP585_ADDRESS = 0x47;     // DFRobot SEN0665 default
@@ -764,9 +768,13 @@ void startSTune() {
     // a clear response without running the fan flat out.
     float outputStep = constrain(desiredAirSpeed * 8.0, 60.0, 200.0);
 
-    // The step starts from PWM 0; MAX_AIRSPEED is the input span and the
-    // emergency stop.
-    if (sTuner->startTuning(desiredAirSpeed, MAX_AIRSPEED, 255.0, 0.0, outputStep,
+    // The step starts with the fan running, not stopped: near 0 m/s the pitot
+    // signal is mostly noise and sTune then finds a wrong dead time. After the
+    // settle time every run starts from the same steady airspeed, whatever the
+    // fan did before. The top of the step is unchanged, so is the peak airspeed.
+    // MAX_AIRSPEED is the input span and the emergency stop.
+    float outputStart = round(outputStep * STUNE_START_FRACTION);
+    if (sTuner->startTuning(desiredAirSpeed, MAX_AIRSPEED, 255.0, outputStart, outputStep,
                             STUNE_TEST_TIME_S, STUNE_SETTLE_TIME_S, STUNE_SAMPLES)) {
         controlMode = MODE_STUNE;
     }
