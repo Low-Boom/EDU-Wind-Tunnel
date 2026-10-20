@@ -74,7 +74,6 @@ const int PRESSURE_OVERSAMPLES = 1;
 
 // Pressure sensor averaging configuration
 int pressureAverageSamples = 20;  // Default: 20 samples
-int savedAverageSamples = 20;     // Saved value during auto-tune
 const int MAX_AVG_SAMPLES = 50;   // Maximum: 50 samples
 const int MIN_AVG_SAMPLES = 1;
 float pressureBuffer[MAX_AVG_SAMPLES];
@@ -117,31 +116,33 @@ size_t serialLineLength = 0;
 bool serialLineTooLong = false;
 const int MAX_COMMAND_WORDS = 4;      // longest command: tune <Kp> <Ki> <Kd>
 
-// Relay Auto-tuning configuration
-const float MIN_TUNE_SETPOINT = 2.0;
-float tuneSetpoint = 0.0;
-uint32_t tuneStartTime = 0;
+// Auto-tuning (relay and sTune)
+const float MIN_TUNE_SETPOINT = 2.0;     // m/s; below this the pitot signal is too small
 
-// Relay tuning state
-enum RelayState { RELAY_HIGH, RELAY_LOW };
-RelayState relayState = RELAY_HIGH;
-float relayOutputHigh = 0;
-float relayOutputLow = 0;
-float relayHysteresis = 0.5;  // m/s hysteresis band
+// PID gain limits, shared by manual entry and both auto-tuners
+const float KP_MIN = 1.0, KP_MAX = 100.0;
+const float KI_MIN = 0.1, KI_MAX = 50.0;
+const float KD_MIN = 0.1, KD_MAX = 50.0;
 
-// Oscillation detection
-float peakHigh = -999;
-float peakLow = 999;
-unsigned long lastCrossingTime = 0;
-unsigned long oscillationPeriod = 0;
-int cycleCount = 0;
-const int REQUIRED_CYCLES = 3;  // Need 3 complete cycles
+// Relay auto-tune (Astrom-Hagglund): switch the PWM between a low and a high
+// level whenever the airspeed leaves a band around the target. The resulting
+// steady oscillation gives the ultimate gain Ku and period Tu.
+const float RELAY_HYSTERESIS = 0.5;               // m/s band around the target
+const int REQUIRED_CYCLES = 3;                    // valid cycles to average
+const float MIN_CYCLE_AMPLITUDE = 0.5;            // m/s; smaller swings are noise
+const unsigned long MIN_CYCLE_PERIOD_MS = 2000;   // shorter "cycles" are noise
+const unsigned long RELAY_TIMEOUT_MS = 120000;
+bool relayHigh = false;                // true while the high PWM level is applied
+int relayPwmLow = 0;
+int relayPwmHigh = 0;
+unsigned long tuneStartTime = 0;
+unsigned long lastCrossingTime = 0;    // last HIGH->LOW switch
 bool firstCrossing = true;
-
-// Accumulated measurements
-float sumPeriods = 0;
-float sumAmplitudes = 0;
-int validCycles = 0;
+float peakHigh = 0.0;                  // airspeed extremes of the current cycle
+float peakLow = 0.0;
+int relayCycles = 0;                   // valid cycles measured so far
+float sumPeriodsS = 0.0;
+float sumAmplitudes = 0.0;
 
 // Debug
 unsigned long debugCounter = 0;
@@ -164,6 +165,13 @@ void setManualGains(const char *kpText, const char *kiText, const char *kdText);
 void stopFan();
 void pidBumplessStart();
 void abortTuning(const char *reason);
+void finishTuning(float newKp, float newKi, float newKd);
+void applyGains(float newKp, float newKi, float newKd);
+float clampGain(const char *name, float value, float minValue, float maxValue);
+bool tuneTargetOk();
+void setRelay(bool high);
+void recordRelayCycle();
+void completeRelayTune();
 void runPidControl();
 void printDataLine(unsigned long now, float pressure);
 void printHelp();
@@ -402,7 +410,7 @@ void printDataLine(unsigned long now, float pressure) {
         Serial.print("[TUNE] ");
         uint32_t tuneElapsed = (millis() - tuneStartTime) / 1000;
         Serial.print(tuneElapsed); Serial.print("s | ");
-        Serial.print("Cycle:"); Serial.print(cycleCount); Serial.print(" | ");
+        Serial.print("Cycle:"); Serial.print(relayCycles); Serial.print(" | ");
     } else {
         Serial.print(elapsed); Serial.print("s | ");
     }
@@ -424,270 +432,137 @@ void printDataLine(unsigned long now, float pressure) {
     Serial.println();
 }
 
+// ---------------------------------------------------------------------------
+// Relay auto-tune
+// ---------------------------------------------------------------------------
+
+// Start a relay tune around the present target. pwmLow/pwmHigh = -1 means
+// "estimate the PWM levels from the target".
 void startRelayTune(int pwmLow, int pwmHigh) {
-    if (desiredAirSpeed < MIN_TUNE_SETPOINT) {
-        Serial.println("\n[TUNE] ERROR: Target too low for auto-tune");
-        Serial.print("[TUNE] Minimum target: ");
-        Serial.print(MIN_TUNE_SETPOINT, 2);
-        Serial.println(" m/s");
-        Serial.println("[TUNE] Set a higher target speed first (e.g., 10)");
-        Serial.println("[TUNE] Then type 'tune' to start\n");
+    if (!tuneTargetOk()) return;
+
+    bool autoRange = (pwmLow < 0 || pwmHigh < 0);
+    if (autoRange) {
+        int estimatedPwm = (int)round(desiredAirSpeed * 8);   // rough fan sensitivity
+        pwmHigh = constrain(estimatedPwm + 20, 40, 245);
+        pwmLow = constrain(estimatedPwm - 20, 20, 150);
+    } else if (pwmLow >= pwmHigh) {
+        Serial.println("[ERROR] PWM low must be less than PWM high (e.g. tune 40 100)");
         return;
     }
-    
-    // SAVE CURRENT AVERAGING BEFORE CHANGING IT
-    savedAverageSamples = pressureAverageSamples;
-    
-    // REDUCE AVERAGING FOR FASTER TUNING RESPONSE
-    // setPressureAverageSamples(3);  // Keep some averaging for noise reduction
-    
+    relayPwmLow = pwmLow;
+    relayPwmHigh = pwmHigh;
+
     Serial.println("\n=====================================");
-    Serial.println("[RELAY TUNE] AUTO-TUNE STARTING");
+    Serial.println("[RELAY] AUTO-TUNE STARTING");
     Serial.println("=====================================");
-    Serial.print("[RELAY] Target airspeed: ");
-    Serial.print(desiredAirSpeed, 2);
-    Serial.println(" m/s");
-    Serial.println("[RELAY] Method: Åström-Hägglund Relay");
-    Serial.println("[RELAY] Tuning Rules: AGGRESSIVE (Some Overshoot)");
-    // Serial.print("[RELAY] Averaging temporarily set to 3 (was ");
-    // Serial.print(savedAverageSamples);
-    Serial.println(")");
-    
-    // Calculate relay outputs
-    if (pwmLow > 0 && pwmHigh > 0) {
-        // Manual PWM range provided
-        relayOutputLow = constrain(pwmLow, 0, 255);
-        relayOutputHigh = constrain(pwmHigh, 0, 255);
-        
-        if (relayOutputLow >= relayOutputHigh) {
-            Serial.println("[ERROR] PWM Low must be less than PWM High!");
-            Serial.println("        Example: tune 40 100");
-            setPressureAverageSamples(savedAverageSamples);
-            return;
-        }
-        
-        Serial.println("[RELAY] PWM Range: MANUAL");
-    } else {
-        float estimatedPWM = desiredAirSpeed * 8; // Ball park sensitivity
-        relayOutputHigh = constrain(round(estimatedPWM) + 20, 40, 245);
-        relayOutputLow = constrain(round(estimatedPWM) - 20, 20, 150);
-        
-        Serial.println("[RELAY] PWM Range: AUTO-ESTIMATED");
-        Serial.println("        Tip: If tuning fails, try manual range");
-        Serial.println("        Example: tune 40 100");
-    }
-    
-    Serial.println("[RELAY] Configuration:");
-    Serial.print("        PWM High: "); Serial.println((int)relayOutputHigh);
-    Serial.print("        PWM Low: "); Serial.println((int)relayOutputLow);
-    Serial.print("        PWM Delta: "); Serial.println((int)(relayOutputHigh - relayOutputLow));
-    Serial.print("        Hysteresis: ±"); Serial.print(relayHysteresis); Serial.println(" m/s");
-    Serial.print("        Required cycles: "); Serial.println(REQUIRED_CYCLES);
-    Serial.println("[RELAY] Process:");
-    Serial.println("        1. Oscillate PWM between high/low");
-    Serial.println("        2. Measure oscillation period & amplitude");
-    Serial.println("        3. Calculate AGGRESSIVE PID gains");
-    Serial.println("        Expected: Faster response, some overshoot");
-    Serial.println("        Duration: ~30-60 seconds");
+    Serial.print("[RELAY] Target airspeed: "); Serial.print(desiredAirSpeed, 2); Serial.println(" m/s");
+    Serial.println("[RELAY] Method: Astrom-Hagglund relay, Pessen integral rule");
+    Serial.print("[RELAY] PWM range: "); Serial.print(relayPwmLow);
+    Serial.print(" - "); Serial.print(relayPwmHigh);
+    Serial.println(autoRange ? " (estimated; if tuning fails try e.g. tune 40 100)" : " (manual)");
+    Serial.print("[RELAY] Hysteresis: +/-"); Serial.print(RELAY_HYSTERESIS, 2);
+    Serial.print(" m/s, cycles needed: "); Serial.print(REQUIRED_CYCLES);
+    Serial.print(", timeout: "); Serial.print(RELAY_TIMEOUT_MS / 1000); Serial.println(" s");
+    Serial.println("[RELAY] Type 0 or stop to abort");
     Serial.println("=====================================");
-    
-    // Initialize relay tuning state
-    tuneSetpoint = desiredAirSpeed;
+
     tuneStartTime = millis();
-    relayState = RELAY_HIGH;
-    
-    peakHigh = -999;
-    peakLow = 999;
-    cycleCount = 0;
     firstCrossing = true;
-    sumPeriods = 0;
-    sumAmplitudes = 0;
-    validCycles = 0;
-    
-    // Set PWM to LOW and start
-    relayState = RELAY_LOW;
-    currPWM = relayOutputLow;
-    analogWrite(PWM_pin, (int)relayOutputLow);
-    delay(500);
-    // Verify it was written
-    Serial.print("[RELAY] currPWM variable = ");
-    Serial.println(currPWM, 1);
-    Serial.println("[RELAY] Tuning active");
-    
+    peakHigh = currentAirSpeed;
+    peakLow = currentAirSpeed;
+    relayCycles = 0;
+    sumPeriodsS = 0.0;
+    sumAmplitudes = 0.0;
+    setRelay(false);                   // start low; the first switch is LOW->HIGH
     controlMode = MODE_RELAY_TUNE;
 }
 
+// One relay step per update interval.
 void runRelayTune() {
-    // Update peak tracking
     if (currentAirSpeed > peakHigh) peakHigh = currentAirSpeed;
     if (currentAirSpeed < peakLow) peakLow = currentAirSpeed;
-    
-    // DIRECTLY WRITE PWM every cycle to ensure it's applied
-    int pwmToWrite = (int)round(currPWM);
-    analogWrite(PWM_pin, pwmToWrite);
-    
-    // Relay logic with hysteresis
-    if (relayState == RELAY_HIGH) {
-        // Switch to LOW if airspeed goes above target + hysteresis
-        if (currentAirSpeed > tuneSetpoint + relayHysteresis) {
-            relayState = RELAY_LOW;
-            currPWM = relayOutputLow;
-            analogWrite(PWM_pin, (int)relayOutputLow);
-            
-            Serial.print("[RELAY] Switched to LOW (PWM ");
-            Serial.print((int)relayOutputLow);
-            Serial.print(") at V=");
-            Serial.print(currentAirSpeed, 2);
-            Serial.println(" m/s");
-            
-            // Record crossing
-            if (!firstCrossing) {
-                unsigned long now = millis();
-                oscillationPeriod = now - lastCrossingTime;
-                lastCrossingTime = now;
-                
-                float amplitude = (peakHigh - peakLow) / 2.0;
-                
-                // Valid measurement if amplitude is reasonable
-                if (amplitude > 0.5 && oscillationPeriod > 2000) {
-                    sumPeriods += oscillationPeriod;
-                    sumAmplitudes += amplitude;
-                    validCycles++;
-                    cycleCount++;
-                    
-                    Serial.print("[RELAY] Cycle "); Serial.print(cycleCount);
-                    Serial.print(" | Period: "); Serial.print(oscillationPeriod / 1000.0, 1); Serial.print("s");
-                    Serial.print(" | Amplitude: "); Serial.print(amplitude, 2); Serial.print(" m/s");
-                    Serial.print(" | Peak High: "); Serial.print(peakHigh, 2);
-                    Serial.print(" | Peak Low: "); Serial.println(peakLow, 2);
-                    
-                    // Reset peaks for next cycle
-                    peakHigh = currentAirSpeed;
-                    peakLow = currentAirSpeed;
-                }
-            } else {
-                firstCrossing = false;
-                lastCrossingTime = millis();
-            }
-        }
-    } else {
-        // Switch to HIGH if airspeed goes below target - hysteresis
-        if (currentAirSpeed < tuneSetpoint - relayHysteresis) {
-            relayState = RELAY_HIGH;
-            currPWM = relayOutputHigh;
-            analogWrite(PWM_pin, (int)relayOutputHigh);
-            
-            Serial.print("[RELAY] Switched to HIGH (PWM ");
-            Serial.print((int)relayOutputHigh);
-            Serial.print(") at V=");
-            Serial.print(currentAirSpeed, 2);
-            Serial.println(" m/s");
+
+    if (!relayHigh && currentAirSpeed < desiredAirSpeed - RELAY_HYSTERESIS) {
+        setRelay(true);
+    } else if (relayHigh && currentAirSpeed > desiredAirSpeed + RELAY_HYSTERESIS) {
+        setRelay(false);
+        recordRelayCycle();
+        if (relayCycles >= REQUIRED_CYCLES) {
+            completeRelayTune();
+            return;
         }
     }
-    
-    // Check if we have enough cycles
-    if (validCycles >= REQUIRED_CYCLES) {
-        // Calculate average period and amplitude
-        float avgPeriod = sumPeriods / validCycles / 1000.0;  // seconds
-        float avgAmplitude = sumAmplitudes / validCycles;      // m/s
-        
-        // Calculate ultimate gain (Ku) and period (Tu)
-        float outputStep = relayOutputHigh - relayOutputLow;
-        float Ku = (4.0 * outputStep) / (PI * avgAmplitude * 255.0);  // Normalize by 255 for 0-1 range
-        float Tu = avgPeriod;
-        
-        // AGGRESSIVE TUNING RULES - "Some Overshoot" method
-        // Based on Tyreus-Luyben modified for faster response
-        // More aggressive than conservative ZN rules
-        // Kp = 0.45 * Ku / 0.9;  // ~0.50 * Ku (more aggressive than 0.6)
-        // Ki = 0.54 * Ku / (2.2 * Tu);  // Faster integral action
-        // Kd = 0.15 * Ku * Tu;  // Stronger derivative (2x standard)
-        
-        // Alternative calculation for comparison
-        Kp = 0.7 * Ku;  // Even more aggressive
-        Ki = 1.75 * Ku / Tu;
-        Kd = 0.15 * Ku * Tu;
-        
-        Serial.println("\n[RELAY] Tuning calculations:");
-        Serial.print("  Standard (Some Overshoot): Kp="); Serial.print(Kp, 2);
-        Serial.print(", Ki="); Serial.print(Ki, 2);
-        Serial.print(", Kd="); Serial.println(Kd, 2);
-        // Serial.print("  Extra Aggressive option: Kp="); Serial.print(Kp_aggressive, 2);
-        // Serial.print(", Ki="); Serial.print(Ki_aggressive, 2);
-        // Serial.print(", Kd="); Serial.println(Kd_aggressive, 2);
-        // Serial.println("  Using: Some Overshoot (balanced aggressive)");
-        
-        // Tuning Bounds
-        Kp = constrain(Kp, 10.0, 100.0);
-        Ki = constrain(Ki, 1.0, 10.0);
-        Kd = constrain(Kd, 1.0, 10.0);
-        
-        myPID.SetTunings(Kp, Ki, Kd);
-        
-        // RESTORE PREVIOUS AVERAGING SETTING
-        setPressureAverageSamples(savedAverageSamples);
-        
-        // Stop motor
-        currPWM = 0;
-        analogWrite(PWM_pin, 0);
-        
-        Serial.println("\n=====================================");
-        Serial.println("[RELAY] AUTO-TUNE COMPLETE!");
-        Serial.println("=====================================");
-        Serial.println("        Measured Parameters:");
-        Serial.print("          Period (Tu): "); Serial.print(Tu, 2); Serial.println(" s");
-        Serial.print("          Amplitude: "); Serial.print(avgAmplitude, 2); Serial.println(" m/s");
-        Serial.print("          Ultimate Gain (Ku): "); Serial.println(Ku, 4);
-        Serial.print("          PWM Range: "); Serial.print((int)relayOutputLow);
-        Serial.print(" - "); Serial.println((int)relayOutputHigh);
-        Serial.println("        Calculated PID Gains (AGGRESSIVE):");
-        Serial.print("          Kp = "); Serial.println(Kp, 4);
-        Serial.print("          Ki = "); Serial.println(Ki, 4);
-        Serial.print("          Kd = "); Serial.println(Kd, 4);
-        Serial.println("        Tuning Method: Some Overshoot");
-        Serial.println("        Expected: Fast response, minor overshoot");
-        Serial.print("        Averaging restored to ");
-        Serial.print(savedAverageSamples);
-        Serial.println(" samples");
-        Serial.println("        PID updated and ready");
-        Serial.println("        ");
-        Serial.println("        If too aggressive, reduce Kp by 20-30%");
-        Serial.println("        If too slow, increase all gains by 20%");
-        Serial.print("        Or manually set: tune ");
-        Serial.print(Kp, 1); Serial.print(" ");
-        Serial.print(Ki, 1); Serial.print(" ");
-        Serial.println(Kd, 1);
-        Serial.println("=====================================\n");
-        
-        controlMode = MODE_PID;
-        desiredAirSpeed = tuneSetpoint;
-        lastPWMOutput = 0;
-        pidBumplessStart();
+
+    if (millis() - tuneStartTime > RELAY_TIMEOUT_MS) {
+        Serial.print("\n[RELAY] Not enough oscillation: ");
+        Serial.print(relayCycles); Serial.print(" of "); Serial.print(REQUIRED_CYCLES);
+        Serial.println(" valid cycles");
+        Serial.println("        - Check fan power and the PWM wiring");
+        Serial.println("        - Make sure the target lies between the speeds of the two PWM levels");
+        Serial.println("        - Try a manual range, e.g. tune 40 100");
+        abortTuning("relay tune timeout");
     }
-    
-    // Timeout after 120 seconds
-    if ((millis() - tuneStartTime) > 120000) {
-        Serial.println("\n[RELAY] AUTO-TUNE TIMEOUT!");
-        Serial.println("        Not enough oscillations detected");
-        Serial.print("        Valid cycles: "); Serial.print(validCycles);
-        Serial.print(" / "); Serial.println(REQUIRED_CYCLES);
-        Serial.println("        Troubleshooting:");
-        Serial.println("        - Check motor/ESC connection and power");
-        Serial.println("        - Verify PWM pin wiring");
-        Serial.println("        - Try different PWM range");
-        Serial.println("        - Ensure target airspeed is achievable");
-        Serial.print("        - Current range: "); Serial.print((int)relayOutputLow);
-        Serial.print(" - "); Serial.println((int)relayOutputHigh);
-        Serial.print("        - Peak airspeed seen: "); Serial.print(peakHigh, 2);
-        Serial.println(" m/s");
-        
-        setPressureAverageSamples(savedAverageSamples);
-        controlMode = MODE_PID;
-        currPWM = 0;
-        analogWrite(PWM_pin, 0);
-        lastPWMOutput = 0;
-        pidBumplessStart();
+}
+
+// Apply the low or high relay level.
+void setRelay(bool high) {
+    relayHigh = high;
+    int pwm = high ? relayPwmHigh : relayPwmLow;
+    currPWM = pwm;
+    lastPWMOutput = pwm;
+    analogWrite(PWM_pin, pwm);
+    Serial.print("[RELAY] Switched to "); Serial.print(high ? "HIGH" : "LOW");
+    Serial.print(" (PWM "); Serial.print(pwm);
+    Serial.print(") at V="); Serial.print(currentAirSpeed, 2); Serial.println(" m/s");
+}
+
+// Called at every HIGH->LOW switch: one full oscillation cycle has ended.
+void recordRelayCycle() {
+    unsigned long now = millis();
+    if (!firstCrossing) {
+        unsigned long periodMs = now - lastCrossingTime;
+        float amplitude = (peakHigh - peakLow) / 2.0;
+        if (amplitude > MIN_CYCLE_AMPLITUDE && periodMs > MIN_CYCLE_PERIOD_MS) {
+            relayCycles++;
+            sumPeriodsS += periodMs / 1000.0;
+            sumAmplitudes += amplitude;
+            Serial.print("[RELAY] Cycle "); Serial.print(relayCycles);
+            Serial.print(" | Period: "); Serial.print(periodMs / 1000.0, 1); Serial.print(" s");
+            Serial.print(" | Amplitude: "); Serial.print(amplitude, 2); Serial.println(" m/s");
+        }
     }
+    // Every HIGH->LOW switch (the first one too) starts a new cycle window,
+    // so the peaks always belong to exactly one cycle.
+    firstCrossing = false;
+    lastCrossingTime = now;
+    peakHigh = currentAirSpeed;
+    peakLow = currentAirSpeed;
+}
+
+// Enough cycles: compute Ku and Tu, then the PID gains.
+void completeRelayTune() {
+    float tu = sumPeriodsS / relayCycles;              // ultimate period, s
+    float amplitude = sumAmplitudes / relayCycles;     // a, m/s
+    // Describing function of a relay with output amplitude d = (high-low)/2:
+    // Ku = 4d / (pi a) = 2 (high - low) / (pi a), in PWM per m/s.
+    float ku = 2.0 * (relayPwmHigh - relayPwmLow) / (PI * amplitude);
+
+    // Pessen integral rule: Kp = 0.7 Ku, Ti = 0.4 Tu, Td = 0.15 Tu
+    float newKp = 0.7 * ku;
+    float newKi = 1.75 * ku / tu;       // Kp / Ti
+    float newKd = 0.105 * ku * tu;      // Kp * Td
+
+    Serial.println("\n=====================================");
+    Serial.println("[RELAY] AUTO-TUNE COMPLETE");
+    Serial.println("=====================================");
+    Serial.print("        Period Tu: "); Serial.print(tu, 2); Serial.println(" s");
+    Serial.print("        Amplitude: "); Serial.print(amplitude, 2); Serial.println(" m/s");
+    Serial.print("        Ultimate gain Ku: "); Serial.print(ku, 3); Serial.println(" PWM per m/s");
+    Serial.print("        Pessen integral rule: Kp="); Serial.print(newKp, 3);
+    Serial.print(" Ki="); Serial.print(newKi, 3);
+    Serial.print(" Kd="); Serial.println(newKd, 3);
+    finishTuning(newKp, newKi, newKd);
 }
 
 void setPressureAverageSamples(int samples) {
@@ -1020,22 +895,32 @@ void setManualGains(const char *kpText, const char *kiText, const char *kdText) 
     if (!parseDecimal(kpText, newKp) || !parseDecimal(kiText, newKi) ||
         !parseDecimal(kdText, newKd) || newKp <= 0 || newKi < 0 || newKd < 0) {
         Serial.println("[ERROR] Invalid PID values");
-        Serial.println("        Usage: tune <Kp> <Ki> <Kd>");
-        Serial.println("        Example: tune 20 8 12");
-        Serial.println("        Ranges: Kp(1-100), Ki(0.1-50), Kd(0.1-50)");
+        Serial.println("        Usage: tune <Kp> <Ki> <Kd>   Example: tune 20 8 12");
         return;
     }
-    Kp = constrain(newKp, 1.0, 100.0);
-    Ki = constrain(newKi, 0.1, 50.0);
-    Kd = constrain(newKd, 0.1, 50.0);
+    applyGains(newKp, newKi, newKd);   // takes effect on the next Compute(), no bump
+}
 
-    myPID.SetTunings(Kp, Ki, Kd);   // takes effect on the next Compute(), no bump
+// Clamp the gains to the allowed ranges (reporting any that were clamped)
+// and give them to the PID. Used by manual entry and both auto-tuners.
+void applyGains(float newKp, float newKi, float newKd) {
+    Kp = clampGain("Kp", newKp, KP_MIN, KP_MAX);
+    Ki = clampGain("Ki", newKi, KI_MIN, KI_MAX);
+    Kd = clampGain("Kd", newKd, KD_MIN, KD_MAX);
+    myPID.SetTunings(Kp, Ki, Kd);
+    Serial.print("[PID] Gains set: Kp="); Serial.print(Kp, 3);
+    Serial.print(" Ki="); Serial.print(Ki, 3);
+    Serial.print(" Kd="); Serial.println(Kd, 3);
+}
 
-    Serial.println("\n[PID] Manual PID gains set:");
-    Serial.print("      Kp = "); Serial.println(Kp, 4);
-    Serial.print("      Ki = "); Serial.println(Ki, 4);
-    Serial.print("      Kd = "); Serial.println(Kd, 4);
-    Serial.println("      Applied to the running controller\n");
+float clampGain(const char *name, float value, float minValue, float maxValue) {
+    float clamped = constrain(value, minValue, maxValue);
+    if (clamped != value) {
+        Serial.print("[PID] "); Serial.print(name); Serial.print(" = "); Serial.print(value, 3);
+        Serial.print(" is outside "); Serial.print(minValue, 1); Serial.print("-");
+        Serial.print(maxValue, 1); Serial.print(", clamped to "); Serial.println(clamped, 3);
+    }
+    return clamped;
 }
 
 // Stop the fan now and leave the PID idle at zero output and zero target.
@@ -1056,7 +941,16 @@ void pidBumplessStart() {
     myPID.SetMode(QuickPID::Control::timer);
 }
 
-// End a running relay tune or sTune without applying any gains.
+// Auto-tunes only work with a clear airspeed signal around the target.
+bool tuneTargetOk() {
+    if (desiredAirSpeed >= MIN_TUNE_SETPOINT) return true;
+    Serial.print("[ERROR] Set a target of at least "); Serial.print(MIN_TUNE_SETPOINT, 1);
+    Serial.println(" m/s before tuning (e.g. 10, then tune or stune)");
+    return false;
+}
+
+// End a running relay tune or sTune without applying any gains (user abort,
+// timeout or tuner error): fan off, target 0, PID re-initialised.
 void abortTuning(const char *reason) {
     if (controlMode == MODE_STUNE) sTuner->reset();
     controlMode = MODE_PID;
@@ -1064,6 +958,21 @@ void abortTuning(const char *reason) {
     Serial.print("\n[TUNE] Tuning aborted (");
     Serial.print(reason);
     Serial.println(") - fan stopped, target 0 m/s, gains unchanged\n");
+}
+
+// A tune succeeded: apply the gains and hand the fan to the PID at its
+// present PWM and the tune target, so the fan keeps running smoothly.
+void finishTuning(float newKp, float newKi, float newKd) {
+    if (controlMode == MODE_STUNE) sTuner->reset();   // note: rewrites currPWM
+    controlMode = MODE_PID;
+    applyGains(newKp, newKi, newKd);
+    currPWM = lastPWMOutput;                           // PWM the fan runs at now
+    pidBumplessStart();
+    Serial.print("[TUNE] PID running at target "); Serial.print(desiredAirSpeed, 2);
+    Serial.println(" m/s with the new gains");
+    Serial.print("[TUNE] To reuse these gains later: tune ");
+    Serial.print(Kp, 3); Serial.print(" "); Serial.print(Ki, 3); Serial.print(" "); Serial.println(Kd, 3);
+    Serial.println("=====================================\n");
 }
 
 void printHelp() {
@@ -1074,7 +983,10 @@ void printHelp() {
     Serial.println("  tune                 Relay auto-tune, automatic PWM range");
     Serial.println("  tune <low> <high>    Relay auto-tune, PWM range 1-255 (e.g. tune 40 100)");
     Serial.println("  tune <Kp> <Ki> <Kd>  Set PID gains (e.g. tune 20 8 12)");
-    Serial.println("                       Ranges: Kp 1-100, Ki 0.1-50, Kd 0.1-50");
+    Serial.print  ("                       Ranges: Kp "); Serial.print(KP_MIN, 0); Serial.print("-");
+    Serial.print(KP_MAX, 0); Serial.print(", Ki "); Serial.print(KI_MIN, 1); Serial.print("-");
+    Serial.print(KI_MAX, 0); Serial.print(", Kd "); Serial.print(KD_MIN, 1); Serial.print("-");
+    Serial.println(KD_MAX, 0);
     Serial.println("  stune                sTune step-response auto-tune");
     Serial.print  ("  recal [N]            Re-zero the pressure sensor (N = ");
     Serial.print(MIN_CALIB_SAMPLES); Serial.print("-"); Serial.print(MAX_CALIB_SAMPLES);
@@ -1165,26 +1077,19 @@ void initializeBarometer() {
     delay(100);
 }
 
-// sTune autotuning functions
+// ---------------------------------------------------------------------------
+// sTune auto-tune (open-loop step test, inflection point method)
+// ---------------------------------------------------------------------------
+
 void startSTune() {
-    if (desiredAirSpeed < MIN_TUNE_SETPOINT) {
-        Serial.println("\n[sTune] ERROR: Target too low for auto-tune");
-        Serial.print("[sTune] Minimum target: ");
-        Serial.print(MIN_TUNE_SETPOINT, 2);
-        Serial.println(" m/s");
-        Serial.println("[sTune] Set a higher target speed first (e.g., 10)");
-        Serial.println("[sTune] Then type 'stune' to start\n");
-        return;
-    }
-    
-    // Save current averaging for potential restoration
-    savedAverageSamples = pressureAverageSamples;
-    
-    // Start sTune with appropriate parameters
-    // Parameters: setpoint, inputSpan, outputSpan, outputStart, outputStep, testTime, settleTime, samples
-    float outputStep = desiredAirSpeed * 8.0; // Estimate based on typical response
-    outputStep = constrain(outputStep, 60.0, 200.0);
-    
+    if (!tuneTargetOk()) return;
+
+    // Step size: rough PWM needed for the target, kept in a range that gives
+    // a clear response without running the fan flat out.
+    float outputStep = constrain(desiredAirSpeed * 8.0, 60.0, 200.0);
+
+    // setpoint, input span, output span, output start, output step,
+    // test time (s), settle time (s), samples (60 s / 300 = one per 200 ms)
     if (sTuner->startTuning(desiredAirSpeed, MAX_AIRSPEED, 255.0, 0.0, outputStep, 60, 5, 300)) {
         controlMode = MODE_STUNE;
     }
@@ -1196,46 +1101,21 @@ void startSTune() {
 void runSTune() {
     STunePIDTuner::TuningStatus status = sTuner->update();
 
+    if (status == STunePIDTuner::COMPLETED) {
+        float newKp, newKi, newKd;
+        sTuner->getTunedGains(newKp, newKi, newKd);
+        finishTuning(newKp, newKi, newKd);
+        return;
+    }
+    if (status == STunePIDTuner::TIMEOUT || status == STunePIDTuner::ERROR) {
+        abortTuning(status == STunePIDTuner::TIMEOUT ? "sTune timeout" : "sTune error");
+        return;
+    }
+
     int pwm = constrain((int)round(currPWM), 0, 255);
     if (pwm != lastPWMOutput) {
         analogWrite(PWM_pin, pwm);
         lastPWMOutput = pwm;
-    }
-    
-    if (status == STunePIDTuner::COMPLETED) {
-        // Get tuned gains and apply to PID
-        float newKp, newKi, newKd;
-        if (sTuner->getTunedGains(newKp, newKi, newKd)) {
-            Kp = newKp;
-            Ki = newKi;
-            Kd = newKd;
-            
-            myPID.SetTunings(Kp, Ki, Kd);
-            
-            Serial.println("[sTune] Gains applied to PID controller");
-            Serial.println("[sTune] Resuming normal operation");
-        }
-        
-        // Restore averaging setting
-        setPressureAverageSamples(savedAverageSamples);
-        
-        controlMode = MODE_PID;
-        sTuner->reset();
-        lastPWMOutput = 0;
-        pidBumplessStart();
-        
-    } else if (status == STunePIDTuner::TIMEOUT || status == STunePIDTuner::ERROR) {
-        Serial.println("[sTune] Tuning failed - keeping previous gains");
-        
-        // Restore averaging setting
-        setPressureAverageSamples(savedAverageSamples);
-        
-        controlMode = MODE_PID;
-        sTuner->reset();
-        currPWM = 0;
-        analogWrite(PWM_pin, 0);
-        lastPWMOutput = 0;
-        pidBumplessStart();
     }
 }
 
