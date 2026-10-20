@@ -97,7 +97,7 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     // Fresh sTune object for this run, then configure it.
     // Memory: Configure() -> sTan::begin() allocates a new float[samples * 0.06]
     // buffer for the sliding tangent on every call and never frees the old
-    // one (4 * 18 = 72 bytes of heap per sTune run with 300 samples). The
+    // one (4 floats = 16 bytes of heap per sTune run with 75 samples). The
     // buffer belongs to the global sTan object in sTune.cpp, not to the sTune
     // object, so the wrapper cannot free it without changing the library.
     // Configure() is called exactly once per run.
