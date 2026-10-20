@@ -179,7 +179,7 @@ void setFanPwm(int pwm);
 void stopFan();
 void pidBumplessStart();
 void runPidControl();
-void applyGains(float newKp, float newKi, float newKd);
+bool applyGains(float newKp, float newKi, float newKd);
 float clampGain(const char *name, float value, float minValue, float maxValue);
 // Auto-tuning
 bool tuneTargetOk();
@@ -601,7 +601,14 @@ void runPidControl() {
 // Clamp the gains to the allowed ranges (reporting any that were clamped)
 // and give them to the PID. Used by manual entry and both auto-tuners.
 // SetTunings() keeps the integral, so the change takes effect without a bump.
-void applyGains(float newKp, float newKi, float newKd) {
+// A set with a non-finite value is refused as a whole: constrain() passes
+// nan through, and a nan gain makes the PID output nan, which the ESP32-P4
+// turns into PWM 255.
+bool applyGains(float newKp, float newKi, float newKd) {
+    if (!isfinite(newKp) || !isfinite(newKi) || !isfinite(newKd)) {
+        Serial.println("[ERROR] PID gains must be finite numbers - gains unchanged");
+        return false;
+    }
     kp = clampGain("Kp", newKp, KP_MIN, KP_MAX);
     ki = clampGain("Ki", newKi, KI_MIN, KI_MAX);
     kd = clampGain("Kd", newKd, KD_MIN, KD_MAX);
@@ -609,6 +616,7 @@ void applyGains(float newKp, float newKi, float newKd) {
     Serial.print("[PID] Gains set: Kp="); Serial.print(kp, 3);
     Serial.print(" Ki="); Serial.print(ki, 3);
     Serial.print(" Kd="); Serial.println(kd, 3);
+    return true;
 }
 
 float clampGain(const char *name, float value, float minValue, float maxValue) {
@@ -787,8 +795,11 @@ void runSTune() {
 
     if (status == STunePIDTuner::COMPLETED) {
         float newKp, newKi, newKd;
-        sTuner->getTunedGains(newKp, newKi, newKd);
-        finishTuning(newKp, newKi, newKd);
+        if (sTuner->getTunedGains(newKp, newKi, newKd)) {
+            finishTuning(newKp, newKi, newKd);
+        } else {
+            abortTuning("sTune found no usable step response");
+        }
         return;
     }
     if (status == STunePIDTuner::TIMEOUT || status == STunePIDTuner::ERROR) {
@@ -813,9 +824,12 @@ void abortTuning(const char *reason) {
 // A tune succeeded: apply the gains and hand the fan to the PID at its
 // present PWM and the tune target, so the fan keeps running smoothly.
 void finishTuning(float newKp, float newKi, float newKd) {
+    if (!applyGains(newKp, newKi, newKd)) {
+        abortTuning("the tuner gave invalid gains");
+        return;
+    }
     if (controlMode == MODE_STUNE) sTuner->reset();   // note: rewrites currPWM
     controlMode = MODE_PID;
-    applyGains(newKp, newKi, newKd);
     currPWM = fanPwm;                                  // PWM the fan runs at now
     pidBumplessStart();
     Serial.print("[TUNE] PID running at target "); Serial.print(desiredAirSpeed, 2);

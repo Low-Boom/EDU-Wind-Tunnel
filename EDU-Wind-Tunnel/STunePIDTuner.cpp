@@ -10,7 +10,11 @@
 #include "STunePIDTuner.h"
 #include <new>      // placement new
 #include <string.h> // memset
-#include <math.h>   // INFINITY
+#include <math.h>   // INFINITY, isfinite
+
+static bool isPositiveFinite(float x) {
+    return isfinite(x) && x > 0.0;
+}
 
 STunePIDTuner::STunePIDTuner(float *input, float *output, sTune::TuningMethod tuningMethod)
     : _tuner(nullptr),
@@ -56,8 +60,10 @@ void STunePIDTuner::createTuner() {
     // constructor runs (GCC's -flifetime-dse may otherwise drop stores to an
     // object's storage that happen before its constructor).
     __asm__ __volatile__("" : : "r"(_tunerStorage) : "memory");
+    // printOFF: sTune's own summary prints its gains in its own form (see
+    // convertGains()); printResults() prints the converted ones instead.
     _tuner = new (_tunerStorage) sTune(_input, _output, _tuningMethod,
-                                       sTune::directIP, sTune::printSUMMARY);
+                                       sTune::directIP, sTune::printOFF);
     *_output = savedOutput;
 }
 
@@ -176,28 +182,15 @@ STunePIDTuner::TuningStatus STunePIDTuner::update() {
         switch (tuneResult) {
 
             case sTune::tunings: {
-                // Tuning completed successfully
-                _tuner->GetAutoTunings(&_kp, &_ki, &_kd);
-                _gainsValid = true;
+                // The test has ended. sTune also ends it when the airspeed
+                // never rose clearly (fan not reacting, hose off, step too
+                // small), so check the result before offering the gains.
+                float kpSpan, invTi, invTd;
+                _tuner->GetAutoTunings(&kpSpan, &invTi, &invTd);
+                convertGains(kpSpan, invTi, invTd);
+                _gainsValid = resultUsable();
                 _status = COMPLETED;
-                
-                unsigned long duration = (millis() - _startTime) / 1000;
-                
-                Serial.println("\n=====================================");
-                Serial.println("[sTune] AUTOTUNING COMPLETE!");
-                Serial.println("=====================================");
-                Serial.print("[sTune] Duration: "); Serial.print(duration); Serial.println(" seconds");
-                Serial.println("[sTune] Tuned PID Gains:");
-                Serial.print("        Kp = "); Serial.println(_kp, 4);
-                Serial.print("        Ki = "); Serial.println(_ki, 4);
-                Serial.print("        Kd = "); Serial.println(_kd, 4);
-                Serial.println("[sTune] Process Characteristics:");
-                Serial.print("        Process Gain: "); Serial.println(getProcessGain(), 4);
-                Serial.print("        Dead Time: "); Serial.print(getDeadTime(), 2); Serial.println(" s");
-                Serial.print("        Time Constant (Tau): "); Serial.print(getTau(), 2); Serial.println(" s");
-                Serial.print("[sTune] Tuning method: "); Serial.println(getTuningMethodName());
-                Serial.println("[sTune] Gains ready to apply");
-                Serial.println("=====================================\n");
+                printResults();
                 break;
             }
                 
@@ -255,10 +248,51 @@ void STunePIDTuner::setEmergencyStop(float limit) {
     _eStop = limit;   // checked in update(); 0 = use the run's inputSpan
 }
 
+// sTune 2.4.0 does not give its gains in QuickPID's form (sTune.cpp):
+// - Kp is per unit of span: the process gain is normalised to the input and
+//   output spans (line 194), so every Kp rule is "% output per % input";
+// - GetKi() returns 1/Ti, e.g. Ziegler-Nichols 1/(2 td) (line 429);
+// - GetKd() returns 1/Td, e.g. 1/(0.5 td) (line 452), and 0 for PI methods.
+// QuickPID is parallel form in raw units (PWM, m/s):
+//   output = Kp e + Ki integral(e) + Kd de/dt, with Ki = Kp/Ti, Kd = Kp Td.
+void STunePIDTuner::convertGains(float kpSpan, float invTi, float invTd) {
+    _kp = kpSpan * _outputSpan / _inputSpan;           // PWM per m/s
+    _ki = _kp * invTi;                                 // Kp / Ti
+    _kd = (invTd == 0.0) ? 0.0 : _kp / invTd;          // Kp * Td (PI: no D)
+}
+
+// A step test without a clear response still "completes" in sTune, with a
+// zero (or nan) dead time, time constant or process gain; its formulas then
+// divide by zero and give nan/inf gains. Only a complete model is usable.
+bool STunePIDTuner::resultUsable() const {
+    return isPositiveFinite(_kp) && isPositiveFinite(_ki) && isfinite(_kd) && _kd >= 0.0 &&
+           isPositiveFinite(getTau()) && isPositiveFinite(getDeadTime()) &&
+           isPositiveFinite(getProcessGain());
+}
+
+// Result of the step test: the process model, and the PID gains if usable.
 void STunePIDTuner::printResults() {
-    if (_tuner != nullptr) {
-        _tuner->printResults();
+    Serial.println("\n=====================================");
+    Serial.println(_gainsValid ? "[sTune] AUTOTUNING COMPLETE" : "[sTune] NO USABLE STEP RESPONSE");
+    Serial.println("=====================================");
+    Serial.print("[sTune] Duration: "); Serial.print((millis() - _startTime) / 1000);
+    Serial.println(" seconds");
+    Serial.println("[sTune] Process model from the step response:");
+    Serial.print("        Process gain: "); Serial.print(getProcessGain() * _inputSpan / _outputSpan, 4);
+    Serial.println(" m/s per PWM");
+    Serial.print("        Dead time: "); Serial.print(getDeadTime(), 2); Serial.println(" s");
+    Serial.print("        Time constant (Tau): "); Serial.print(getTau(), 2); Serial.println(" s");
+    if (_gainsValid) {
+        Serial.print("[sTune] PID gains ("); Serial.print(getTuningMethodName()); Serial.println("):");
+        Serial.print("        Kp = "); Serial.println(_kp, 4);
+        Serial.print("        Ki = "); Serial.println(_ki, 4);
+        Serial.print("        Kd = "); Serial.println(_kd, 4);
+    } else {
+        Serial.println("[sTune] The airspeed did not rise clearly after the step, so no gains");
+        Serial.println("        can be computed. Check fan power, the PWM wiring and the pitot");
+        Serial.println("        hoses, or set a higher target (larger step), then try again.");
     }
+    Serial.println("=====================================\n");
 }
 
 float STunePIDTuner::getProcessGain() const {

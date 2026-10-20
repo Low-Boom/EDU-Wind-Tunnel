@@ -74,11 +74,12 @@ public:
     bool isFinished();
 
     /**
-     * Get the tuned PID gains
+     * Get the tuned PID gains, converted to QuickPID's parallel form in raw
+     * units (output per input unit, e.g. PWM per m/s; see convertGains())
      * @param kp Output: Proportional gain
      * @param ki Output: Integral gain
      * @param kd Output: Derivative gain
-     * @return true if tuning completed and gains are valid
+     * @return true if tuning completed with a usable step response
      */
     bool getTunedGains(float &kp, float &ki, float &kd);
 
@@ -121,12 +122,13 @@ public:
     const char* getTuningMethodName() const;
 
     /**
-     * Print tuning results to Serial
+     * Print the result of the last step test (process model and gains)
      */
     void printResults();
 
     /**
-     * Get process characteristics
+     * Get process characteristics as sTune reports them: the process gain is
+     * normalised to the spans (% output per % input), times in seconds
      */
     float getProcessGain() const;
     float getDeadTime() const;
@@ -139,6 +141,8 @@ private:
     // object built in zero-filled storage inside this wrapper (no separate
     // heap block).
     void createTuner();
+    void convertGains(float kpSpan, float invTi, float invTd);
+    bool resultUsable() const;
 
     alignas(sTune) unsigned char _tunerStorage[sizeof(sTune)];
     sTune *_tuner;              // sTune instance (lives in _tunerStorage)
