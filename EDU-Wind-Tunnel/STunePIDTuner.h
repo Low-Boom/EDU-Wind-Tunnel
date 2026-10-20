@@ -122,9 +122,13 @@ public:
     const char* getTuningMethodName() const;
 
     /**
-     * Print the result of the last step test (process model and gains)
+     * Print how the last run ended: the process model and gains (COMPLETED),
+     * or why it ended early (TIMEOUT, ERROR). update() prints nothing when a
+     * run ends, so the caller can stop the fan first (printing can block on
+     * a native USB port; see serialHasRoom() in PlatformConfig.h). Call it
+     * before reset().
      */
-    void printResults();
+    void printReport();
 
     /**
      * Get process characteristics as sTune reports them: the process gain is
@@ -165,6 +169,7 @@ private:
     uint32_t _settleTimeSec;
     uint16_t _samples;
     float _eStop;               // emergency stop limit (0 = inputSpan of the run)
+    float _eStopInput;          // input that tripped the emergency stop
 };
 
 #endif // STUNE_PID_TUNER_H

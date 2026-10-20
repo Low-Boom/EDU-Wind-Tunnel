@@ -18,7 +18,7 @@
  *   FAN_PWM_PIN           PWM output to the fan
  *   FAN_PWM_FREQUENCY_HZ  Fan PWM frequency (0 = core default)
  *   SERIAL_TX_CAN_BLOCK   1 if Serial.print() can block while the host does
- *                         not read (native USB serial); see printDataLine()
+ *                         not read (native USB serial); see serialHasRoom()
  *   STATUS_LED_PIN        LED that blinks on a fatal error (-1 = none)
  *
  * Copyright (c) 2025 Low-Boom
@@ -86,5 +86,21 @@
 #else
   #define STATUS_LED_PIN        -1
 #endif
+
+// A native USB serial port (SERIAL_TX_CAN_BLOCK) makes Serial.print() wait
+// while the host keeps the port open but does not read (paused logger,
+// terminal in selection mode). loop() would freeze there, and with it the
+// stop command and the safety checks. So routine output (data lines, status
+// lines) is only printed if it fits into the transmit buffer and is skipped
+// otherwise; essential messages are printed anyway, but only after the fan
+// is in a safe state. Always true where printing never blocks (UART).
+inline bool serialHasRoom(int chars) {
+#if SERIAL_TX_CAN_BLOCK
+  return Serial.availableForWrite() >= chars;
+#else
+  (void)chars;
+  return true;
+#endif
+}
 
 #endif // PLATFORM_CONFIG_H

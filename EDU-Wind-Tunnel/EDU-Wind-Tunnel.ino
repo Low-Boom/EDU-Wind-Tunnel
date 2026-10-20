@@ -176,20 +176,22 @@ unsigned long runStartTime = 0;          // for the time stamp of the data line
 unsigned long dataLineCount = 0;
 unsigned long lastSlowPassWarning = 0;
 const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;
-// Data lines skipped because the serial port had no room (SERIAL_TX_CAN_BLOCK)
+// Routine output is skipped while it would block (see serialHasRoom())
 const int DATA_LINE_MAX_LENGTH = 128;    // longest data line, with all suffixes
+const int STATUS_LINE_MAX_LENGTH = 64;   // longest relay switch or cycle line
 unsigned long skippedDataLines = 0;
 
 // --- Serial command input (one line is collected without blocking loop()) ---
 const size_t SERIAL_LINE_SIZE = 64;      // buffer size incl. the terminating '\0'
 const int MAX_COMMAND_WORDS = 4;         // longest command: tune <Kp> <Ki> <Kd>
-// A line also ends after this long without a new character, so the serial
-// monitor's "No line ending" setting works too.
+// Until the first CR or LF arrives, a line also ends after this long without
+// a new character, so the serial monitor's "No line ending" setting works too.
 const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
 char serialLine[SERIAL_LINE_SIZE];
 size_t serialLineLength = 0;
 bool serialLineTooLong = false;
 unsigned long lastSerialCharTime = 0;
+bool lineEndingSeen = false;             // a CR or LF has arrived: no idle timeout
 
 // ===========================================================================
 // Forward declarations
@@ -665,7 +667,9 @@ void stopFan() {
 
 // Stop the fan now, whatever runs: a tune is aborted (gains unchanged),
 // otherwise the PID is left idle at target 0. Used by the stop command and
-// by the safety checks.
+// by the safety checks. The fan is always stopped before anything is
+// printed, because printing can block (see serialHasRoom()); callers print
+// their own error message after this call for the same reason.
 void stopAll(const char *reason) {
     if (controlMode != MODE_PID) {
         abortTuning(reason);
@@ -768,8 +772,8 @@ float clampGain(const char *name, float value, float minValue, float maxValue) {
 void checkPressureSensor() {
     if (invalidPressureReads < MAX_INVALID_PRESSURE_READS) return;
     if (controlMode == MODE_PID && desiredAirSpeed <= 0 && fanPwm == 0) return;   // already off
-    Serial.println("\n[ERROR] Differential pressure sensor not responding");
     stopAll("no valid pressure data");
+    Serial.println("[ERROR] Differential pressure sensor not responding");
 }
 
 // PID mode, once per update: full fan power for a long time with (almost)
@@ -787,8 +791,8 @@ void checkAirflow() {
     if (fanPwm >= NO_AIRFLOW_PWM) noAirflowFullPowerMs += UPDATE_INTERVAL_MS;
     if (noAirflowFullPowerMs < NO_AIRFLOW_TIMEOUT_MS) return;
     noAirflowFullPowerMs = 0;
-    Serial.println("\n[ERROR] No airflow measured at full fan power - check the pitot tubes");
     stopAll("no airflow");
+    Serial.println("[ERROR] No airflow measured at full fan power - check the pitot tubes");
 }
 
 // ===========================================================================
@@ -876,22 +880,24 @@ void runRelayTune() {
     }
 
     if (millis() - tuneStartTime > RELAY_TIMEOUT_MS) {
-        Serial.print("\n[RELAY] Not enough oscillation: ");
+        abortTuning("relay tune timeout");   // fan off before the advice below
+        Serial.print("[RELAY] Not enough oscillation: ");
         Serial.print(relayCycles); Serial.print(" of "); Serial.print(REQUIRED_CYCLES);
         Serial.println(" valid cycles");
         Serial.println("        - Check fan power and the PWM wiring");
         Serial.println("        - Make sure the target lies between the speeds of the two PWM levels");
         Serial.println("        - Try a manual range, e.g. tune 40 100");
-        abortTuning("relay tune timeout");
     }
 }
 
-// Apply the low or high relay level.
+// Apply the low or high relay level. The status line is optional and is
+// skipped if it would block (see serialHasRoom()).
 void setRelay(bool high) {
     relayHigh = high;
     int pwm = high ? relayPwmHigh : relayPwmLow;
     currPWM = pwm;
     setFanPwm(pwm);
+    if (!serialHasRoom(STATUS_LINE_MAX_LENGTH)) return;
     Serial.print("[RELAY] Switched to "); Serial.print(high ? "HIGH" : "LOW");
     Serial.print(" (PWM "); Serial.print(pwm);
     Serial.print(") at V="); Serial.print(currentAirSpeed, 2); Serial.println(" m/s");
@@ -907,9 +913,11 @@ void recordRelayCycle() {
             relayCycles++;
             sumPeriodsS += periodMs / 1000.0;
             sumAmplitudes += amplitude;
-            Serial.print("[RELAY] Cycle "); Serial.print(relayCycles);
-            Serial.print(" | Period: "); Serial.print(periodMs / 1000.0, 1); Serial.print(" s");
-            Serial.print(" | Amplitude: "); Serial.print(amplitude, 2); Serial.println(" m/s");
+            if (serialHasRoom(STATUS_LINE_MAX_LENGTH)) {   // optional, see setRelay()
+                Serial.print("[RELAY] Cycle "); Serial.print(relayCycles);
+                Serial.print(" | Period: "); Serial.print(periodMs / 1000.0, 1); Serial.print(" s");
+                Serial.print(" | Amplitude: "); Serial.print(amplitude, 2); Serial.println(" m/s");
+            }
         }
     }
     // Every HIGH->LOW switch (the first one too) starts a new cycle window,
@@ -974,20 +982,27 @@ void startSTune() {
 
 // sTune step test, called on every loop() pass. sTune sets currPWM through
 // the pointer it was given; setFanPwm() only writes when the value changes.
+// When the test ends, the wrapper's report is printed only after the fan has
+// a safe state (see printReport()).
 void runSTune() {
     STunePIDTuner::TuningStatus status = sTuner->update();
 
     if (status == STunePIDTuner::COMPLETED) {
         float newKp, newKi, newKd;
         if (sTuner->getTunedGains(newKp, newKi, newKd)) {
+            sTuner->printReport();
             finishTuning(newKp, newKi, newKd);
         } else {
             abortTuning("sTune found no usable step response");
         }
         return;
     }
-    if (status == STunePIDTuner::TIMEOUT || status == STunePIDTuner::ERROR) {
-        abortTuning(status == STunePIDTuner::TIMEOUT ? "sTune timeout" : "sTune error");
+    if (status == STunePIDTuner::TIMEOUT) {
+        abortTuning("sTune timeout");
+        return;
+    }
+    if (status == STunePIDTuner::ERROR) {
+        abortTuning("airspeed above MAX_AIRSPEED");
         return;
     }
 
@@ -995,14 +1010,20 @@ void runSTune() {
 }
 
 // End a running relay tune or sTune without applying any gains (user abort,
-// timeout or tuner error): fan off, target 0, PID re-initialised.
+// timeout, safety check or tuner error): fan off, target 0, PID
+// re-initialised. The fan is stopped before anything is printed, because
+// printing can block (see serialHasRoom()).
 void abortTuning(const char *reason) {
-    if (controlMode == MODE_STUNE) sTuner->reset();
+    bool wasSTune = (controlMode == MODE_STUNE);
     controlMode = MODE_PID;
     stopFan();
     Serial.print("\n[TUNE] Tuning aborted (");
     Serial.print(reason);
     Serial.println(") - fan stopped, target 0 m/s, gains unchanged\n");
+    if (wasSTune) {
+        sTuner->printReport();           // sTune's own details (model, timeout)
+        sTuner->reset();
+    }
 }
 
 // A tune succeeded: apply the gains and hand the fan to the PID at its
@@ -1012,7 +1033,7 @@ void finishTuning(float newKp, float newKi, float newKd) {
         abortTuning("the tuner gave invalid gains");
         return;
     }
-    if (controlMode == MODE_STUNE) sTuner->reset();   // note: rewrites currPWM
+    if (controlMode == MODE_STUNE) sTuner->reset();
     controlMode = MODE_PID;
     currPWM = fanPwm;                                  // PWM the fan runs at now
     pidBumplessStart();
@@ -1028,14 +1049,18 @@ void finishTuning(float newKp, float newKi, float newKd) {
 // ===========================================================================
 
 // Collect typed characters without blocking and run each complete line.
-// A line ends with LF, CR or CR+LF, or when no new character has arrived
-// for SERIAL_LINE_TIMEOUT_MS ("No line ending"), so every serial monitor
-// setting works and a partial line is never prepended to a later command.
+// A line ends with LF, CR or CR+LF. Until the first of these arrives, a line
+// also ends when no new character has arrived for SERIAL_LINE_TIMEOUT_MS, so
+// the serial monitor's "No line ending" setting works too. Once the terminal
+// has shown that it ends its lines, the timeout is off: terminals that send
+// every key at once would otherwise split a command typed with a pause, e.g.
+// "tune" + pause + " 20 8 12" would start a relay tune instead of setting gains.
 void pollSerialCommands() {
     while (Serial.available() > 0) {
         char c = (char)Serial.read();
         lastSerialCharTime = millis();
         if (c == '\n' || c == '\r') {
+            lineEndingSeen = true;
             endSerialLine();
         } else if (serialLineLength < SERIAL_LINE_SIZE - 1) {
             serialLine[serialLineLength++] = c;
@@ -1044,7 +1069,7 @@ void pollSerialCommands() {
         }
     }
     bool partialLine = serialLineLength > 0 || serialLineTooLong;
-    if (partialLine && millis() - lastSerialCharTime >= SERIAL_LINE_TIMEOUT_MS) {
+    if (partialLine && !lineEndingSeen && millis() - lastSerialCharTime >= SERIAL_LINE_TIMEOUT_MS) {
         endSerialLine();
     }
 }
@@ -1068,18 +1093,19 @@ void handleCommand(char *line) {
     char *words[MAX_COMMAND_WORDS];
     int count = splitWords(line, words, MAX_COMMAND_WORDS);
     if (count == 0) return;              // blank line
-    if (count > MAX_COMMAND_WORDS) {
-        Serial.println("[ERROR] Too many values - type 'help' for the command list");
-        return;
-    }
 
     const char *cmd = words[0];
     float number = 0.0;
     bool isNumber = parseDecimal(cmd, number);
 
-    // Stop works in every mode, including during a tune.
-    if (count == 1 && (wordIs(cmd, "stop") || (isNumber && number == 0.0))) {
+    // Stop works in every mode, including during a tune. A stop must never
+    // be refused, so any line that starts with "stop" counts ("stop now").
+    if (wordIs(cmd, "stop") || (count == 1 && isNumber && number == 0.0)) {
         stopAll("stopped by user");
+        return;
+    }
+    if (count > MAX_COMMAND_WORDS) {
+        Serial.println("[ERROR] Too many values - type 'help' for the command list");
         return;
     }
 
@@ -1264,16 +1290,12 @@ void printHelp() {
 // One line per update interval (format in the header comment). The relay
 // tune shows its own elapsed time and cycle count; sTune shows its phase.
 void printDataLine(unsigned long now, float pressure) {
-    // A native USB serial port blocks in print() while the host keeps it open
-    // but does not read (paused logger, terminal in selection mode). loop()
-    // and the stop command would freeze with the fan running, so a line that
-    // does not fit into the transmit buffer is skipped and counted instead.
-    #if SERIAL_TX_CAN_BLOCK
-        if (Serial.availableForWrite() < DATA_LINE_MAX_LENGTH) {
-            skippedDataLines++;
-            return;
-        }
-    #endif
+    // A line that would block (see serialHasRoom()) is skipped and counted;
+    // the next line that fits reports the count.
+    if (!serialHasRoom(DATA_LINE_MAX_LENGTH)) {
+        skippedDataLines++;
+        return;
+    }
     dataLineCount++;
     if (controlMode == MODE_STUNE) {
         Serial.print("[sTune] "); Serial.print(sTuner->getStatusString()); Serial.print(" | ");
