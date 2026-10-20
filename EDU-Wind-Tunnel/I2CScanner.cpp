@@ -1,9 +1,8 @@
 /*
  * I2CScanner.cpp
  * 
- * Multi-bus I2C scanner utility for Arduino platforms
- * Automatically detects and scans all available I2C buses (Wire, Wire1, Wire2)
- * based on WIRE_INTERFACES_COUNT macro.
+ * Multi-bus I2C scanner: scans Wire (and Wire1 where the board has it)
+ * and remembers which bus each device was found on.
  * 
  * Copyright (c) 2025 Low-Boom
  * Licensed under MIT License
@@ -42,13 +41,11 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     out.println(busName);
     
     // Short timeout so an empty bus aborts quickly. The API differs per core:
-    // ESP32 takes milliseconds, the AVR-style and Renesas (Uno R4) cores take
-    // microseconds. endTransmission() returns 5 on timeout on all of them.
+    // ESP32 takes milliseconds, the Uno R4 (Renesas) core microseconds.
+    // endTransmission() returns 5 on timeout on both.
     #if defined(ARDUINO_ARCH_ESP32)
         wire->setTimeOut(SCAN_TIMEOUT_MS);
-    #elif defined(WIRE_HAS_TIMEOUT)
-        wire->setWireTimeout(SCAN_TIMEOUT_MS * 1000UL, true);  // reset bus on timeout
-    #elif defined(ARDUINO_ARCH_RENESAS)
+    #else
         wire->setWireTimeout(SCAN_TIMEOUT_MS * 1000UL);
     #endif
     
@@ -108,11 +105,6 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
         out.println(devicesFound);
     }
     
-    // Clear the sticky timeout flag (only cores with WIRE_HAS_TIMEOUT have one)
-    #if defined(WIRE_HAS_TIMEOUT)
-        wire->clearWireTimeoutFlag();
-    #endif
-    
     out.println();
 }
 
@@ -128,33 +120,16 @@ void scanAllI2CBuses(Stream &out) {
     out.println(WIRE_INTERFACES_COUNT);
     out.println();
     
-    // Initialize all I2C buses FIRST before scanning any of them
-    // This prevents issues on boards like Uno Rev4 where an empty Wire bus
-    // can hang during scanning if Wire1 hasn't been initialized yet
+    // Uno R4 WiFi: Wire1 is the Qwiic connector. Initialise and scan it
+    // first, because an empty Wire bus can hang if Wire1 is not yet set up.
     #if WIRE_INTERFACES_COUNT > 1
         out.println("Initializing Wire1...");
         Wire1.begin();
-    #endif
-    
-    #if WIRE_INTERFACES_COUNT > 2
-        out.println("Initializing Wire2...");
-        Wire2.begin();
-    #endif
-    
-    // On multi-bus boards (like Uno Rev4), scan Wire1 FIRST
-    // This works around issue where empty Wire bus can hang even with timeout
-    #if WIRE_INTERFACES_COUNT > 1
         scanSingleBus(&Wire1, "Wire1", out);
     #endif
     
-    // Scan Wire2 before Wire if available (Arduino GIGA H7)
-    #if WIRE_INTERFACES_COUNT > 2
-        scanSingleBus(&Wire2, "Wire2", out);
-    #endif
-    
-    // Scan Wire bus (primary I2C bus)
-    // On multi-bus boards, Wire is scanned last so Wire1/Wire2 are already found
-    // Early abort logic in scanSingleBus prevents long delays on empty buses
+    // Scan Wire (the main bus) last; the early abort in scanSingleBus keeps
+    // an empty bus from taking long.
     scanSingleBus(&Wire, "Wire", out);
     
     out.println("=====================================");

@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// Platform-specific pin and hardware configuration (ESP32, M5 Atom, classic Arduino)
+// Board-specific pins and settings (ESP32-P4, Arduino Uno R4 Minima / WiFi)
 #include "PlatformConfig.h"
 
 // Sensor libraries
@@ -28,9 +28,6 @@
 // For PI control, use: ZN_PI, DampedOsc_PI, NoOvershoot_PI, CohenCoon_PI, Mixed_PI
 const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
 
-// MBED support
-// #include "mbed.h"
-
 #define SEALEVELPRESSURE_HPA (1013.25)
 #define DPS_ADDRESS 0x00   // DFRobot LWLP5000 (SEN0343) — fixed I2C address
 #define BMP_I2C_ADDRESS 0x47  // DFRobot BMP585 (SEN0665) — default I2C address (alt: 0x46)
@@ -38,16 +35,7 @@ const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
 // PID gains - Full PID control
 float Kp = 25.0, Ki = 10.0, Kd = 15.0;
 
-// Pin assignments (platform defaults set in PlatformConfig.h – edit there to change)
-const int PWM_pin  = DEFAULT_PWM_PIN;    // Motor PWM control output
-const int TACH_pin = DEFAULT_TACH_PIN;   // Tachometer pulse input
-
-// Status LED used to signal a fatal error (-1 = board has no simple LED)
-#ifdef LED_BUILTIN
-const int STATUS_LED_PIN = LED_BUILTIN;
-#else
-const int STATUS_LED_PIN = -1;
-#endif
+// Pins (FAN_PWM_PIN, STATUS_LED_PIN, I2C pins) are set in PlatformConfig.h
 const int ENC_PPR = 2;
 const float kI = 1;
 
@@ -203,8 +191,8 @@ bool changed = false;
 void setup() {
     // Drive the fan off before anything else: until pinMode() runs the PWM pin
     // floats and some fan drivers read a floating input as "full speed".
-    pinMode(PWM_pin, OUTPUT);
-    digitalWrite(PWM_pin, LOW);
+    pinMode(FAN_PWM_PIN, OUTPUT);
+    digitalWrite(FAN_PWM_PIN, LOW);
     if (STATUS_LED_PIN >= 0) {
         pinMode(STATUS_LED_PIN, OUTPUT);
         digitalWrite(STATUS_LED_PIN, LOW);
@@ -230,7 +218,7 @@ void setup() {
     #if I2C_SDA_PIN >= 0
         Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);  // ESP32: explicit SDA/SCL
     #else
-        Wire.begin();                            // Classic Arduino: use board defaults
+        Wire.begin();                            // Uno R4: board default SDA/SCL
     #endif
     Wire.setClock(400000);
     Serial.println(" OK (400kHz)");
@@ -260,15 +248,11 @@ void setup() {
     initializeBarometer();
 
     // Initialize hardware
-    Serial.println("[INIT] Motor & Tachometer...");
-    Serial.print("        PWM Pin: "); Serial.println(PWM_pin);
-    Serial.print("        TACH Pin: "); Serial.println(TACH_pin);
+    Serial.println("[INIT] Fan PWM...");
+    Serial.print("        PWM Pin: "); Serial.println(FAN_PWM_PIN);
     
-    pinMode(PWM_pin, OUTPUT);
-    analogWrite(PWM_pin, 0);  // Start at 0
-    
-    pinMode(TACH_pin, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(TACH_pin), OnTachPulse, FALLING);
+    pinMode(FAN_PWM_PIN, OUTPUT);
+    analogWrite(FAN_PWM_PIN, 0);  // Start at 0
     
     Serial.println("        OK");
     delay(100);
@@ -318,8 +302,7 @@ void setup() {
     Serial.println("[READY] System initialized!");
     Serial.println("");
     Serial.println("HARDWARE:");
-    Serial.print("  PWM Output: Pin "); Serial.println(PWM_pin);
-    Serial.print("  Tachometer: Pin "); Serial.println(TACH_pin);
+    Serial.print("  PWM Output: Pin "); Serial.println(FAN_PWM_PIN);
     Serial.println("");
     printHelp();
     Serial.println("=====================================\n");
@@ -396,7 +379,7 @@ void runPidControl() {
         pwmOut = lastPWMOutput + pwmChange;
     }
     lastPWMOutput = pwmOut;
-    analogWrite(PWM_pin, pwmOut);
+    analogWrite(FAN_PWM_PIN, pwmOut);
 }
 
 void printDataLine(unsigned long now, float pressure) {
@@ -511,7 +494,7 @@ void setRelay(bool high) {
     int pwm = high ? relayPwmHigh : relayPwmLow;
     currPWM = pwm;
     lastPWMOutput = pwm;
-    analogWrite(PWM_pin, pwm);
+    analogWrite(FAN_PWM_PIN, pwm);
     Serial.print("[RELAY] Switched to "); Serial.print(high ? "HIGH" : "LOW");
     Serial.print(" (PWM "); Serial.print(pwm);
     Serial.print(") at V="); Serial.print(currentAirSpeed, 2); Serial.println(" m/s");
@@ -928,7 +911,7 @@ void stopFan() {
     desiredAirSpeed = 0;
     currPWM = 0;
     lastPWMOutput = 0;
-    analogWrite(PWM_pin, 0);
+    analogWrite(FAN_PWM_PIN, 0);
     pidBumplessStart();
 }
 
@@ -1114,7 +1097,7 @@ void runSTune() {
 
     int pwm = constrain((int)round(currPWM), 0, 255);
     if (pwm != lastPWMOutput) {
-        analogWrite(PWM_pin, pwm);
+        analogWrite(FAN_PWM_PIN, pwm);
         lastPWMOutput = pwm;
     }
 }
@@ -1124,7 +1107,7 @@ void runSTune() {
 // The sketch never continues, because running the fan without valid sensor
 // data would mean running it without control.
 void haltWithError(const char *msg) {
-    analogWrite(PWM_pin, 0);
+    analogWrite(FAN_PWM_PIN, 0);
     Serial.print("[FATAL] ");
     Serial.println(msg);
     Serial.println("[FATAL] System halted with the fan off. Fix the fault and reset the board.");
