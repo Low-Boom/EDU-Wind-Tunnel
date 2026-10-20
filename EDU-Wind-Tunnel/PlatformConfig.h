@@ -14,9 +14,11 @@
  * Defines
  * -------
  *   BOARD_NAME            Shown in the start-up banner
- *   I2C_SDA_PIN/SCL_PIN   I2C pins for Wire (-1 = core default pins)
+ *   I2C_SDA_PIN/SCL_PIN   I2C pins for Wire (-1 = the board's default pins)
  *   FAN_PWM_PIN           PWM output to the fan
  *   FAN_PWM_FREQUENCY_HZ  Fan PWM frequency (0 = core default)
+ *   SERIAL_TX_CAN_BLOCK   1 if Serial.print() can block while the host does
+ *                         not read (native USB serial); see printDataLine()
  *   STATUS_LED_PIN        LED that blinks on a fatal error (-1 = none)
  *
  * Copyright (c) 2025 Low-Boom
@@ -34,26 +36,43 @@
 // do NOT use them.
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
   #define BOARD_NAME            "ESP32-P4"
-  #define I2C_SDA_PIN           7       // same as the core's default SDA
-  #define I2C_SCL_PIN           8       // same as the core's default SCL
+  // -1 = the default I2C pins of the board selected in the IDE (SDA/SCL in
+  // the core's pins_arduino.h): GPIO 7/8 on the ESP32P4 Dev Module and the
+  // Waveshare boards, 53/54 (Grove Port A) on the M5Stack Tab5. Put GPIO
+  // numbers here only if your sensors are wired to other pins.
+  #define I2C_SDA_PIN           -1
+  #define I2C_SCL_PIN           -1
   #define FAN_PWM_PIN           6
   // 25 kHz is the PWM frequency of 4-pin PC fans (Intel spec) and is above
   // human hearing; the core's 1 kHz default can make fans whine.
   #define FAN_PWM_FREQUENCY_HZ  25000
+  // Serial is UART0 by default and always drains. With "USB CDC On Boot:
+  // Enabled" it is the chip's own USB port, which waits for the host.
+  #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+    #define SERIAL_TX_CAN_BLOCK 1
+  #else
+    #define SERIAL_TX_CAN_BLOCK 0
+  #endif
 
 #elif defined(ARDUINO_ARCH_ESP32)
   #error "Unsupported ESP32 chip. EDU-Wind-Tunnel supports the ESP32-P4 and Arduino Uno R4 Minima / WiFi."
 
 // ---- Arduino Uno R4 Minima / Uno R4 WiFi ----
-// Wire uses the board's SDA/SCL header pins (A4/A5).
+// The I2C pins are fixed by the board: Wire is the SDA/SCL header (A4/A5),
+// Wire1 the Qwiic connector (WiFi only). The core has no Wire.begin(sda, scl).
 #elif defined(ARDUINO_UNOR4_MINIMA) || defined(ARDUINO_UNOR4_WIFI)
   #if defined(ARDUINO_UNOR4_WIFI)
     #define BOARD_NAME          "Arduino Uno R4 WiFi"
+    #define SERIAL_TX_CAN_BLOCK 0       // UART to the on-board USB bridge
   #else
     #define BOARD_NAME          "Arduino Uno R4 Minima"
+    #define SERIAL_TX_CAN_BLOCK 1       // native USB serial
   #endif
-  #define I2C_SDA_PIN           -1
-  #define I2C_SCL_PIN           -1
+  #define I2C_SDA_PIN           -1      // fixed, leave at -1
+  #define I2C_SCL_PIN           -1      // fixed, leave at -1
+  #if I2C_SDA_PIN != -1 || I2C_SCL_PIN != -1
+    #error "Uno R4: the I2C pins are fixed by the board; leave I2C_SDA_PIN and I2C_SCL_PIN at -1."
+  #endif
   #define FAN_PWM_PIN           9
   #define FAN_PWM_FREQUENCY_HZ  0       // core default (490 Hz)
 

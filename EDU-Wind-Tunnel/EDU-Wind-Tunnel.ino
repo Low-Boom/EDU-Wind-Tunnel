@@ -104,6 +104,7 @@ const float STUNE_START_FRACTION = 0.6;
 const uint32_t STUNE_SETTLE_TIME_S = 25;
 
 // Sensors
+const uint8_t LWLP_ADDRESS = 0x00;       // fixed (the I2C general-call address)
 const uint8_t BMP585_ADDRESS = 0x47;     // DFRobot SEN0665 default
 const uint8_t BMP585_ALT_ADDRESS = 0x46; // with the address jumper changed
 const float AIR_GAS_CONSTANT = 287.058;  // J/(kg K), specific gas constant of dry air
@@ -129,7 +130,7 @@ const unsigned long NO_AIRFLOW_TIMEOUT_MS = 15000;   // full-power time without 
 // ===========================================================================
 
 // --- Sensors ---
-DFRobot_LWLP lwlp;                       // differential pressure (I2C address 0x00)
+DFRobot_LWLP *lwlp = nullptr;            // differential pressure, created once its bus is known
 DFRobot_BMP58X_I2C *barometer = nullptr; // created once its address is known
 float pressureOffset = 0.0;              // Pa, zero error found by calibration
 float pressureBuffer[MAX_AVG_SAMPLES];   // moving-average ring buffer
@@ -175,6 +176,9 @@ unsigned long runStartTime = 0;          // for the time stamp of the data line
 unsigned long dataLineCount = 0;
 unsigned long lastSlowPassWarning = 0;
 const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;
+// Data lines skipped because the serial port had no room (SERIAL_TX_CAN_BLOCK)
+const int DATA_LINE_MAX_LENGTH = 128;    // longest data line, with all suffixes
+unsigned long skippedDataLines = 0;
 
 // --- Serial command input (one line is collected without blocking loop()) ---
 const size_t SERIAL_LINE_SIZE = 64;      // buffer size incl. the terminating '\0'
@@ -192,6 +196,7 @@ unsigned long lastSerialCharTime = 0;
 // ===========================================================================
 
 // Sensors
+void initPressureSensor();
 void initBarometer();
 bool readPressureRaw(float &pressurePa);
 bool readPressureCorrected(float &pressurePa);
@@ -263,32 +268,26 @@ void setup() {
     // I2C. Keep the core default clock (100 kHz standard mode): both sensors
     // support it and it is more forgiving of long sensor wires than 400 kHz.
     Serial.print("[INIT] I2C bus...");
-    #if I2C_SDA_PIN >= 0
-        Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-    #else
-        Wire.begin();
-    #endif
-    Serial.print(" OK (");
     #if defined(ARDUINO_ARCH_ESP32)
-        Serial.print(Wire.getClock() / 1000);
+        bool i2cStarted = Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);   // -1 = board default
+        int sdaPin = (I2C_SDA_PIN >= 0) ? I2C_SDA_PIN : SDA;
+        int sclPin = (I2C_SCL_PIN >= 0) ? I2C_SCL_PIN : SCL;
+        unsigned long clockKHz = Wire.getClock() / 1000;
     #else
-        Serial.print(100);               // Uno R4: Wire.begin() always sets 100 kHz (no getter)
+        Wire.begin();                    // Uno R4: fixed pins, returns nothing
+        bool i2cStarted = true;
+        int sdaPin = SDA, sclPin = SCL;
+        unsigned long clockKHz = 100;    // Wire.begin() always sets 100 kHz (no getter)
     #endif
-    Serial.println(" kHz)");
+    if (!i2cStarted) {
+        Serial.println(" FAILED");
+        haltWithError("I2C bus could not be started - check I2C_SDA_PIN/I2C_SCL_PIN in PlatformConfig.h");
+    }
+    Serial.print(" OK (SDA "); Serial.print(sdaPin); Serial.print(", SCL "); Serial.print(sclPin);
+    Serial.print(", "); Serial.print(clockKHz); Serial.println(" kHz)");
     scanAllI2CBuses(Serial);
 
-    // Differential pressure sensor. Its fixed address 0x00 is outside the
-    // scanner's range, so it is started directly on Wire.
-    Serial.print("[INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)...");
-    if (lwlp.begin() != 0) {
-        Serial.println(" FAILED");
-        Serial.println("[ERROR] Check the SEN0343 connections to Wire (SDA/SCL)");
-        haltWithError("Differential pressure sensor not responding");
-    }
-    Serial.println(" OK");
-    Serial.print("        Averaging: "); Serial.print(pressureAverageSamples);
-    Serial.println(" samples");
-
+    initPressureSensor();
     initBarometer();
 
     Serial.println("[INIT] Fan PWM...");
@@ -386,6 +385,31 @@ void loop() {
 // Sensors
 // ===========================================================================
 
+// The LWLP5000's fixed address 0x00 is outside the scanner's range, so it is
+// probed on each bus (header and, on the Uno R4 WiFi, Qwiic). The driver
+// takes its bus in the constructor, so it is created once the bus is known.
+void initPressureSensor() {
+    Serial.print("[INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)...");
+    const char *busName = nullptr;
+    TwoWire *bus = probeDeviceBus(LWLP_ADDRESS, &busName);
+    if (bus == nullptr) {
+        Serial.println(" NOT FOUND");
+        Serial.println("[ERROR] No device at 0x00 on any I2C bus; check the SEN0343 wiring");
+        haltWithError("Differential pressure sensor not responding");
+    }
+
+    lwlp = new DFRobot_LWLP(bus);
+    if (lwlp->begin() != 0) {
+        Serial.println(" FAILED");
+        Serial.print("[ERROR] Device found on "); Serial.print(busName);
+        Serial.println(" but it does not respond like an LWLP5000");
+        haltWithError("Differential pressure sensor not responding");
+    }
+    Serial.print(" OK (on "); Serial.print(busName); Serial.println(")");
+    Serial.print("        Averaging: "); Serial.print(pressureAverageSamples);
+    Serial.println(" samples");
+}
+
 // Find the BMP585 in the scan results (default address first, then the
 // alternative) and start it. The driver takes the address in its constructor,
 // so it is created once, after the address is known.
@@ -426,7 +450,7 @@ void initBarometer() {
 // at power-on; calibration removes what is left of the zero error. Blocks
 // for about 60 ms (the library waits for the conversion).
 bool readPressureRaw(float &pressurePa) {
-    DFRobot_LWLP::sLwlp_t reading = lwlp.getData();
+    DFRobot_LWLP::sLwlp_t reading = lwlp->getData();
     pressurePa = reading.presure;        // "presure" is the library's spelling
     return reading.presureData != LWLP_INVALID_CODE;
 }
@@ -611,9 +635,12 @@ void setFanPwm(int pwm) {
     pwm = constrain(pwm, 0, 255);
     if (pwm == fanPwm) return;
     #if defined(ARDUINO_ARCH_ESP32)
-        // The ESP32 core sets up the PWM channel on the first analogWrite()
-        // using the frequency chosen beforehand, so set it once, first.
+        // First write: attach the PWM (LEDC) channel with analogWrite(0), then
+        // change its frequency. Before the pin is attached, arduino-esp32
+        // 3.0.0-3.3.0 ignore analogWriteFrequency() (only later versions keep
+        // it for the attach), so this order works on every 3.x core.
         if (fanPwm < 0 && FAN_PWM_FREQUENCY_HZ > 0) {
+            analogWrite(FAN_PWM_PIN, 0);
             analogWriteFrequency(FAN_PWM_PIN, FAN_PWM_FREQUENCY_HZ);
         }
     #endif
@@ -1224,6 +1251,16 @@ void printHelp() {
 // One line per update interval (format in the header comment). The relay
 // tune shows its own elapsed time and cycle count; sTune shows its phase.
 void printDataLine(unsigned long now, float pressure) {
+    // A native USB serial port blocks in print() while the host keeps it open
+    // but does not read (paused logger, terminal in selection mode). loop()
+    // and the stop command would freeze with the fan running, so a line that
+    // does not fit into the transmit buffer is skipped and counted instead.
+    #if SERIAL_TX_CAN_BLOCK
+        if (Serial.availableForWrite() < DATA_LINE_MAX_LENGTH) {
+            skippedDataLines++;
+            return;
+        }
+    #endif
     dataLineCount++;
     if (controlMode == MODE_STUNE) {
         Serial.print("[sTune] "); Serial.print(sTuner->getStatusString()); Serial.print(" | ");
@@ -1247,6 +1284,10 @@ void printDataLine(unsigned long now, float pressure) {
         Serial.print(" Ki:"); Serial.print(ki, 1);
         Serial.print(" Kd:"); Serial.print(kd, 1);
         Serial.print(" Avg:"); Serial.print(pressureAverageSamples);
+    }
+    if (skippedDataLines > 0) {
+        Serial.print(" | Skipped:"); Serial.print(skippedDataLines);
+        skippedDataLines = 0;
     }
     Serial.println();
 }

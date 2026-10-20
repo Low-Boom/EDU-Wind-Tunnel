@@ -11,8 +11,8 @@
 #include "I2CScanner.h"
 
 // Number of hardware I2C buses to scan. Uno R4 defines WIRE_INTERFACES_COUNT
-// (Minima: 1, WiFi: 2). The ESP32 core does not, and the sketch only uses Wire
-// there (with explicit SDA/SCL pins), so fall back to one bus.
+// (Minima: 1, WiFi: 2). The ESP32 core does not, and the sketch only starts
+// Wire there (Wire1 has no default pins), so fall back to one bus.
 #ifndef WIRE_INTERFACES_COUNT
 #define WIRE_INTERFACES_COUNT 1
 #endif
@@ -149,6 +149,26 @@ TwoWire* getDeviceBus(uint8_t address, const char** busName) {
         }
     }
     return nullptr; // Device not found
+}
+
+// beginTransmission() + endTransmission() == 0: a device ACKed the address.
+static bool deviceAcks(TwoWire *wire, uint8_t address) {
+    wire->beginTransmission(address);
+    return wire->endTransmission(true) == 0;
+}
+
+TwoWire* probeDeviceBus(uint8_t address, const char** busName) {
+    if (deviceAcks(&Wire, address)) {
+        if (busName != nullptr) *busName = "Wire";
+        return &Wire;
+    }
+    #if WIRE_INTERFACES_COUNT > 1
+        if (deviceAcks(&Wire1, address)) {
+            if (busName != nullptr) *busName = "Wire1";
+            return &Wire1;
+        }
+    #endif
+    return nullptr;
 }
 
 int getDeviceCount() {

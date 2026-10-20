@@ -31,7 +31,7 @@ struct I2CDeviceInfo {
  * - Uno R4 WiFi: Wire1 (Qwiic connector), then Wire
  * - Uno R4 Minima: Wire only
  * - ESP32-P4: Wire only (the core does not define WIRE_INTERFACES_COUNT;
- *   Wire is started with the SDA/SCL pins from PlatformConfig.h)
+ *   the sketch starts Wire with the pins from PlatformConfig.h)
  * 
  * Early abort keeps scans of empty buses short:
  * - 25 ms timeout per I2C transaction
@@ -62,6 +62,17 @@ void scanAllI2CBuses(Stream &out);
  * @return Pointer to the TwoWire bus object, or nullptr if not found
  */
 TwoWire* getDeviceBus(uint8_t address, const char** busName = nullptr);
+
+/**
+ * Probe one address directly on every bus the scanner uses: Wire first,
+ * then Wire1 where the board has it. For devices the scan does not cover,
+ * e.g. the LWLP5000 at the general-call address 0x00.
+ *
+ * @param address I2C address to probe
+ * @param busName Pointer to store the bus name (e.g., "Wire1")
+ * @return Pointer to the first bus on which the address ACKs, or nullptr
+ */
+TwoWire* probeDeviceBus(uint8_t address, const char** busName = nullptr);
 
 /**
  * Get count of devices found during last scan
