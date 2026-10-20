@@ -42,7 +42,9 @@ const float kI = 1;
 const int MAX_PRESSURE = 14745.0;
 const float MIN_PRESSURE = 1638.0;
 
-const float MAX_AIRSPEED = 30.0;
+// Highest target. The LWLP5000 is rated to 500 Pa, which is 28.6 m/s at
+// sea-level air density (1.225 kg/m3); above that the reading is not valid.
+const float MAX_AIRSPEED = 28.0;
 const float MIN_AIRSPEED = 0.0;
 const float Specific_gas_constant = 287.058;
 
@@ -84,8 +86,8 @@ unsigned long LastRPMUpdateTime = 0;
 const unsigned long RPM_TIMEOUT_MS = 1000;
 
 // PWM Rate Limiting (disabled during tuning)
-float lastPWMOutput = 0;
-const float MAX_PWM_CHANGE_PER_CYCLE = 25.0;
+int fanPwm = -1;                       // PWM last written to the fan (-1 = never)
+const int MAX_PWM_CHANGE_PER_CYCLE = 25;
 
 // PID and control variables
 float currPWM = 0;
@@ -152,6 +154,7 @@ void setTargetAirspeed(float target);
 void setManualGains(const char *kpText, const char *kiText, const char *kdText);
 void stopFan();
 void pidBumplessStart();
+void setFanPwm(int pwm);
 void abortTuning(const char *reason);
 void finishTuning(float newKp, float newKi, float newKd);
 void applyGains(float newKp, float newKi, float newKd);
@@ -220,8 +223,15 @@ void setup() {
     #else
         Wire.begin();                            // Uno R4: board default SDA/SCL
     #endif
-    Wire.setClock(400000);
-    Serial.println(" OK (400kHz)");
+    // Keep the core default clock (100 kHz standard mode): both sensors
+    // support it and it is more forgiving of long sensor wires than 400 kHz.
+    Serial.print(" OK (");
+    #if defined(ARDUINO_ARCH_ESP32)
+        Serial.print(Wire.getClock() / 1000);
+    #else
+        Serial.print(100);   // Uno R4: Wire.begin() always sets 100 kHz (no getter)
+    #endif
+    Serial.println(" kHz)");
     delay(100);
 
     // Scan all I2C buses for connected devices
@@ -250,9 +260,13 @@ void setup() {
     // Initialize hardware
     Serial.println("[INIT] Fan PWM...");
     Serial.print("        PWM Pin: "); Serial.println(FAN_PWM_PIN);
-    
-    pinMode(FAN_PWM_PIN, OUTPUT);
-    analogWrite(FAN_PWM_PIN, 0);  // Start at 0
+    Serial.print("        Frequency: ");
+    if (FAN_PWM_FREQUENCY_HZ > 0) {
+        Serial.print(FAN_PWM_FREQUENCY_HZ); Serial.println(" Hz");
+    } else {
+        Serial.println("core default");
+    }
+    setFanPwm(0);
     
     Serial.println("        OK");
     delay(100);
@@ -369,17 +383,14 @@ void runPidControl() {
         return;
     }
 
+    // PWM rate limit: the output may move at most MAX_PWM_CHANGE_PER_CYCLE
+    // from the present PWM. Doing this through the PID's output limits (not
+    // after Compute()) also clamps the integral, so it cannot wind up while
+    // the fan is still ramping.
+    myPID.SetOutputLimits(constrain(fanPwm - MAX_PWM_CHANGE_PER_CYCLE, 0, 255),
+                          constrain(fanPwm + MAX_PWM_CHANGE_PER_CYCLE, 0, 255));
     myPID.Compute();
-
-    // Apply PWM with rate limiting
-    int pwmOut = constrain((int)round(currPWM), 0, 255);
-    float pwmChange = pwmOut - lastPWMOutput;
-    if (abs(pwmChange) > MAX_PWM_CHANGE_PER_CYCLE) {
-        pwmChange = (pwmChange > 0) ? MAX_PWM_CHANGE_PER_CYCLE : -MAX_PWM_CHANGE_PER_CYCLE;
-        pwmOut = lastPWMOutput + pwmChange;
-    }
-    lastPWMOutput = pwmOut;
-    analogWrite(FAN_PWM_PIN, pwmOut);
+    setFanPwm((int)round(currPWM));
 }
 
 void printDataLine(unsigned long now, float pressure) {
@@ -493,8 +504,7 @@ void setRelay(bool high) {
     relayHigh = high;
     int pwm = high ? relayPwmHigh : relayPwmLow;
     currPWM = pwm;
-    lastPWMOutput = pwm;
-    analogWrite(FAN_PWM_PIN, pwm);
+    setFanPwm(pwm);
     Serial.print("[RELAY] Switched to "); Serial.print(high ? "HIGH" : "LOW");
     Serial.print(" (PWM "); Serial.print(pwm);
     Serial.print(") at V="); Serial.print(currentAirSpeed, 2); Serial.println(" m/s");
@@ -910,9 +920,25 @@ float clampGain(const char *name, float value, float minValue, float maxValue) {
 void stopFan() {
     desiredAirSpeed = 0;
     currPWM = 0;
-    lastPWMOutput = 0;
-    analogWrite(FAN_PWM_PIN, 0);
+    setFanPwm(0);
     pidBumplessStart();
+}
+
+// The only place that writes the fan PWM. It remembers the applied value
+// (used by the rate limit, the tune hand-over and the data line) and skips
+// writes that would change nothing, because sTune calls it on every pass.
+void setFanPwm(int pwm) {
+    pwm = constrain(pwm, 0, 255);
+    if (pwm == fanPwm) return;
+    #if defined(ARDUINO_ARCH_ESP32)
+        // The ESP32 core sets up the PWM channel on the first analogWrite()
+        // using the frequency chosen beforehand, so set it once, first.
+        if (fanPwm < 0 && FAN_PWM_FREQUENCY_HZ > 0) {
+            analogWriteFrequency(FAN_PWM_PIN, FAN_PWM_FREQUENCY_HZ);
+        }
+    #endif
+    analogWrite(FAN_PWM_PIN, pwm);
+    fanPwm = pwm;
 }
 
 // Hand the fan to the PID without a bump. Switching QuickPID from manual to
@@ -921,6 +947,7 @@ void stopFan() {
 // Compute() continues smoothly from where the fan is now.
 void pidBumplessStart() {
     myPID.SetMode(QuickPID::Control::manual);
+    myPID.SetOutputLimits(0, 255);   // drop the rate-limit window of the last pass
     myPID.SetMode(QuickPID::Control::timer);
 }
 
@@ -949,7 +976,7 @@ void finishTuning(float newKp, float newKi, float newKd) {
     if (controlMode == MODE_STUNE) sTuner->reset();   // note: rewrites currPWM
     controlMode = MODE_PID;
     applyGains(newKp, newKi, newKd);
-    currPWM = lastPWMOutput;                           // PWM the fan runs at now
+    currPWM = fanPwm;                                  // PWM the fan runs at now
     pidBumplessStart();
     Serial.print("[TUNE] PID running at target "); Serial.print(desiredAirSpeed, 2);
     Serial.println(" m/s with the new gains");
@@ -1079,8 +1106,7 @@ void startSTune() {
 }
 
 // sTune step test, called on every loop() pass. sTune sets currPWM through
-// the pointer it was given; write it to the fan only when it changes, since
-// this runs thousands of times per second.
+// the pointer it was given; setFanPwm() only writes when the value changes.
 void runSTune() {
     STunePIDTuner::TuningStatus status = sTuner->update();
 
@@ -1095,11 +1121,7 @@ void runSTune() {
         return;
     }
 
-    int pwm = constrain((int)round(currPWM), 0, 255);
-    if (pwm != lastPWMOutput) {
-        analogWrite(FAN_PWM_PIN, pwm);
-        lastPWMOutput = pwm;
-    }
+    setFanPwm((int)round(currPWM));
 }
 
 // Fatal error: keep the fan off and stop here for good. Blinking the status
@@ -1107,7 +1129,7 @@ void runSTune() {
 // The sketch never continues, because running the fan without valid sensor
 // data would mean running it without control.
 void haltWithError(const char *msg) {
-    analogWrite(FAN_PWM_PIN, 0);
+    setFanPwm(0);
     Serial.print("[FATAL] ");
     Serial.println(msg);
     Serial.println("[FATAL] System halted with the fan off. Fix the fault and reset the board.");
