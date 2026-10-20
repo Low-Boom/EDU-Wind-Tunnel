@@ -11,6 +11,17 @@
 
 #include "I2CScanner.h"
 
+// Number of hardware I2C buses to scan. Uno R4 defines WIRE_INTERFACES_COUNT
+// (Minima: 1, WiFi: 2). The ESP32 core does not, and the sketch only uses Wire
+// there (with explicit SDA/SCL pins), so fall back to one bus.
+#ifndef WIRE_INTERFACES_COUNT
+#define WIRE_INTERFACES_COUNT 1
+#endif
+
+// Per-transaction timeout used while scanning, so an empty bus or a bus
+// without pull-ups cannot stall the scan for long.
+const uint16_t SCAN_TIMEOUT_MS = 25;
+
 // Global device registry
 static I2CDeviceInfo deviceRegistry[MAX_I2C_DEVICES];
 static int deviceCount = 0;
@@ -30,10 +41,15 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     out.print("Scanning I2C bus ");
     out.println(busName);
     
-    // Set a very short timeout to prevent long delays on empty buses
-    // The timeout unit varies by platform, so we use a conservative value
-    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED) || defined(ARDUINO_ARCH_ESP32)
-        wire->setWireTimeout(25000, true); // 25ms timeout, reset on each call
+    // Short timeout so an empty bus aborts quickly. The API differs per core:
+    // ESP32 takes milliseconds, the AVR-style and Renesas (Uno R4) cores take
+    // microseconds. endTransmission() returns 5 on timeout on all of them.
+    #if defined(ARDUINO_ARCH_ESP32)
+        wire->setTimeOut(SCAN_TIMEOUT_MS);
+    #elif defined(WIRE_HAS_TIMEOUT)
+        wire->setWireTimeout(SCAN_TIMEOUT_MS * 1000UL, true);  // reset bus on timeout
+    #elif defined(ARDUINO_ARCH_RENESAS)
+        wire->setWireTimeout(SCAN_TIMEOUT_MS * 1000UL);
     #endif
     
     int devicesFound = 0;
@@ -92,8 +108,8 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
         out.println(devicesFound);
     }
     
-    // Clear any timeout flags that may have been set during scanning
-    #if defined(WIRE_HAS_TIMEOUT) || defined(ARDUINO_ARCH_MBED) || defined(ARDUINO_ARCH_ESP32)
+    // Clear the sticky timeout flag (only cores with WIRE_HAS_TIMEOUT have one)
+    #if defined(WIRE_HAS_TIMEOUT)
         wire->clearWireTimeoutFlag();
     #endif
     
@@ -107,13 +123,6 @@ void scanAllI2CBuses(Stream &out) {
     out.println("\n=====================================");
     out.println("[I2C] Multi-Bus Scanner");
     out.println("=====================================");
-    
-    // Determine number of I2C buses available
-    #if !defined(WIRE_INTERFACES_COUNT)
-        // If not defined, assume single bus (classic Arduino boards)
-        #define WIRE_INTERFACES_COUNT 1
-        out.println("WIRE_INTERFACES_COUNT not defined, assuming 1 bus");
-    #endif
     
     out.print("Available I2C buses: ");
     out.println(WIRE_INTERFACES_COUNT);
