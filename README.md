@@ -1,296 +1,321 @@
-# Educational Wind Tunnel Controller
-**Microcontroller-based PID controller for educational wind tunnel systems**
+# EDU Wind Tunnel Controller
 
-Developed by [Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon
+Firmware for a microcontroller board that keeps the airspeed in a small educational wind tunnel at a target value.
 
-Debugging assitance provided by Antropic Claude Sonnet 4.5 and verified by humans.
+Developed by [Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon.
 
-Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/)
+Debugging assistance provided by Anthropic Claude Sonnet 4.5 and verified by humans. Claude Code (Anthropic) helped with the version 1.3 changes. For their test status, see [Limitations](#limitations).
 
-[![Status](https://img.shields.io/badge/status-stable-success.svg)](https://github.com/Low-Boom/EDU-wind-tunnel)
-[![Version](https://img.shields.io/badge/version-1.2-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
+Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/).
 
-[![ESP32](https://img.shields.io/badge/ESP32--P4-Waveshare-E7352C?logo=espressif)](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)
-[![ESP32](https://img.shields.io/badge/ESP32--P4-M5Stack-E7352C?logo=espressif)](https://shop.m5stack.com/products/m5stack-tab5-iot-development-kit-esp32-p4?srsltid=AfmBOortZshmX320pw43bQy9PAZEDTFahPrh0GdH6Y_72duFPE_Fenuq)
-[![ESP32](https://img.shields.io/badge/ESP32-M5%20Atom%20Stack-E7352C?logo=espressif)](https://shop.m5stack.com/products/atom-lite-esp32-development-kit)
-[![ESP32](https://img.shields.io/badge/ESP32--S3-Generic-E7352C?logo=espressif)](https://www.espressif.com/en/products/socs/esp32-s3)
-
-[![Arduino](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4?srsltid=AfmBOorOs0ix30CZM4vLKSA9m6F7qrPhlblCfdp3-wQMstfBhTvr8o13)
-[![Arduino](https://img.shields.io/badge/Arduino-Giga%20R1-00979D?logo=arduino)](https://store-usa.arduino.cc/products/giga-r1-wifi?srsltid=AfmBOop3Aqtaf3BpQPH1OCf3aJT8Pt39YOuv7pEPDY4g7xi1-DEwiopE)
-[![Arduino](https://img.shields.io/badge/Arduino-Mega%202560%20R3-00979D?logo=arduino)](https://store-usa.arduino.cc/products/arduino-mega-2560-rev3?srsltid=AfmBOopk3fHnK26RSMwzgGKXDylUJ8HzUNyVYfBNoiiwnkMh62EVld_U)
-
-
-
+[![Version](https://img.shields.io/badge/version-1.3-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![ESP32-P4](https://img.shields.io/badge/ESP32--P4-supported-E7352C?logo=espressif)](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)
+[![Uno R4](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4)
 
 ---
 
 ## Features
 
-### Control & Tuning
-- **Full PID Control** (Proportional, Integral, Derivative)
-- **Relay Auto-Tuning** (Åström-Hägglund method)
-- **sTune Auto-Tuning** (Inflection Point method - optional advanced tuning)
-- **Manual PID Tuning** (direct gain adjustment)
-- **PWM Rate Limiting** (smooth motor transitions)
+- Closed-loop control of the airspeed with a PID controller (QuickPID), updated every 200 ms.
+- Two auto-tune methods: relay auto-tune (`tune`) and sTune step-response auto-tune (`stune`).
+- Manual PID gains with one serial command.
+- Air density from the temperature and pressure of the barometric sensor.
+- Zero calibration of the differential pressure sensor at start-up and on command.
+- Automatic search for both sensors on the I2C buses of the board.
+- Safety functions that stop the fan (see [Safety](#safety)).
 
-### Sensor Processing
-- **Pressure Oversampling** (noise reduction)
-- **Configurable Airspeed Averaging** (default 20)
-- **Ambient Temperature Compensation** (automatic air density correction)
-- **Zero-Offset Calibration** (automatic at startup, manual recalibration at will)
-- **Multi-Bus I2C Scanner** (automatic device discovery on all available I2C buses)
+## Supported hardware
 
-### Features in Development (Eventually) 
-- Serial free untethered control via Modulino controls and a screen for mobility
-- A [Controllino](https://www.controllino.com) PLC-based version for industrial applications and education
-- A [Mathworks Simulink](https://www.mathworks.com/products/simulink.html) and [Julia Hub DYAD](https://juliahub.com/products/dyad) compatible controller
-- Integrated Lift-Drag Force Balance
-- Coursework materials for wind tunnel operation and design
+| Microcontroller board | Arduino board package | Status |
+|---|---|---|
+| ESP32-P4 boards, for example Waveshare ESP32-P4-WiFi6-Touch-LCD-7B or M5Stack Tab5 | "esp32 by Espressif Systems" | Recommended |
+| Arduino Uno R4 Minima, Arduino Uno R4 WiFi | "Arduino UNO R4 Boards" | Alternative |
 
----
-## Detailed Documentation
+For all other boards, `PlatformConfig.h` stops the build with an `#error`.
 
-- **[HARDWARE.md](HARDWARE.md)** - Detailed wiring, components, and power supply info
-- **[TUNING_GUIDE.md](TUNING_GUIDE.md)** - Advanced PID tuning techniques
----
+You also need:
 
-## Quick Start
+- The DFRobot SEN0343 (LWLP5000) differential pressure sensor
+- The DFRobot SEN0665 (BMP585) barometric sensor
+- The static pressure ring parts and the pressure tubing
+- A PWM fan with its own power supply
+- A logic level shifter for some board and fan combinations
 
-### Prerequisites
-- Arduino IDE 2.0+ or [VSCode with PlatformIO](https://platformio.org/install/ide?install=vscode) (see Installation notes)
-- ESP32-P4 microcontroller board (primary/recommended; see [HARDWARE.md](HARDWARE.md) for all supported boards)
-- DFRobot SEN0343 (Fermion LWLP5000) differential pressure sensor (±500 Pa, I2C)
-- DFRobot SEN0665 (Fermion BMP585) barometric pressure/temperature sensor (I2C)
-- PWM-controlled fan with external power source (e.g.[ AC Infinity CLOUDLINE A8 EC-PWM Motor](https://acinfinity.com/hydroponics-growers/cloudline-a8-quiet-inline-fan-with-speed-controller-8-inch/#product-reviews) or [Noctua 12V PC Fan](https://www.noctua.at/en/products/nf-a14x25-g2-pwm) as recommended by Jerrod H.)
-- Depending on board and fan combination, a [Bi-Directional Logic Level Lifter](https://www.adafruit.com/product/757?srsltid=AfmBOopBWeXgpfL63fDoCPbWWtu07TIO7QVbofNmTDtQ4QkU7BxYeCWk) with at least two channels
----
+[HARDWARE.md](HARDWARE.md) gives the parts list, the pins, and the wiring for each board and fan.
 
-## Hardware Setup
+## Safety
 
-⚠️ Motor power supply must be separate from the microcontroller! This is 120V AC Power for the AC Infinity Fan or a 12V power supply for the 12V PC Fan (e.g. [Noctua NV-PS1](https://www.noctua.at/en/products/nv-ps1))
+**WARNING:** Connect the fan to its own power supply. Do not power the fan from the microcontroller board.
 
-See [HARDWARE.md](HARDWARE.md) for detailed wiring diagrams and component specifications.
+**WARNING:** Attach the fan and all parts tightly. Keep fingers, hair, loose clothing, and tools away from the fan when it has power.
 
----
+**WARNING:** Until the firmware starts (at power-up, during a reset or an upload), the board does not drive the fan PWM pin. Some fans then run at full speed. Disconnect the fan power before you upload. To prevent this, add a pull-down resistor (see [HARDWARE.md](HARDWARE.md#fan-pwm-line-at-power-up-and-during-uploads)).
 
-## ⚠️ Safety Warnings
+**WARNING:** Start with a low target airspeed (2 to 5 m/s). Increase it in small steps.
 
-1. **Motor Power**: NEVER power motor from the microcontroller - use separate supply
-2. **Mechanical**: Secure all components, keep clear of fan during operation
-3. **Testing**: Start with low speeds (2-5 m/s), gradually increase
-4. **Emergency**: Type `0` to stop or disconnect motor/fan from power
+**WARNING:** To stop the fan, type `0` or `stop` and send the line. This also stops a running auto-tune. Some exceptions apply (see [Limitations](#limitations)). If the serial connection does not work, disconnect the fan power supply.
 
----
+The firmware has these safety functions:
 
-### Installation
-
-1. **Install IDE**
-   - **Arduino IDE** (recommended for beginners): Download from https://www.arduino.cc/en/software
-   - **VSCode + PlatformIO** (alternative, recommended for advanced users): Install [VSCode](https://code.visualstudio.com/) then add the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode). PlatformIO handles board packages and libraries automatically.
-
-2. **Install Board Support** (Arduino IDE only; PlatformIO manages this automatically)
-   - Open: Tools → Board → Boards Manager
-   - Search: "esp32 by Espressif Systems" and install version **3.x** (required for ESP32-P4)
-     - Select "ESP32P4 Dev Module" for ESP32-P4 boards (e.g. [Waveshare ESP32-P4-WiFi6-Touch-LCD-7B](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm))
-     - M5 Atom users: version 2.0+ is sufficient; additionally install the [M5Stack board package](https://docs.m5stack.com/en/arduino/arduino_board) or select a generic ESP32 board and configure `PlatformConfig.h` manually
-   - For Arduino/Mbed boards: search for the appropriate Mbed OS board package (e.g. "Arduino Mbed OS Giga Boards")
-
-3. **Install Required Libraries**
-   - Open: Tools → Manage Libraries
-   - Install:
-     - `DFRobot_BMP58X` (for DFRobot SEN0665 barometer) — also requires `DFRobot_RTU`
-     - `DFRobot_LWLP` (for DFRobot SEN0343 differential pressure sensor)
-     - QuickPID
-     - **sTune** (optional - for advanced PID autotuning)
-
-4. **Upload Code**
-   - Open `EDU-Wind-Tunnel.ino`
-   - Select Board: "ESP32P4 Dev Module" (or your specific board)
-   - Select Port: Your board's COM port
-   - Click Upload
-
-5. **Open Serial Monitor**
-   - Set baud rate: **115200**
-   - Watch initialization messages to confirm successful hardware setup. 
-
-6. **Allow for Initial Calibration"
-   - Once the fan is under control, it will ramp down to 0.
-   - A default wait time of 30 seconds is set to allow for the airflow in the tunnel to fully stop
-   - 50 Samples are taken from the airspeed sensor to establish a zero offset.
-   - This routine can be re-run via the `recal` serial command later
+| Function | What it does | Message |
+|---|---|---|
+| Stop | `0` or `stop` sets the PWM value to 0 and the target airspeed to 0 within one update (200 ms). | `[STOP] Fan stopped, target 0 m/s (stopped by user)` |
+| Calibration | The start-up calibration and `recal` stop the fan first. | `Fan stopped. Keep the tunnel still:` |
+| No airflow | The fan stops if the airspeed stays below 1.0 m/s for 15 s in total at full power. Full power is a PWM value of 250 or more. During a relay auto-tune, the high PWM level counts as full power. This check does not run during `stune`. | `[STOP] Fan stopped, target 0 m/s (no airflow)` |
+| Pressure sensor fault | After 5 invalid readings in a row (1 s), the fan stops in all modes. | `[STOP] Fan stopped, target 0 m/s (no valid pressure data)` |
+| Airspeed limit | The firmware changes a target above the sensor limit to the limit. The limit is 28.0 m/s, or less in dense (cold) air. | `[WARN] Capping at 28.00 m/s (sensor limit in the present air)` |
+| Over-speed during an auto-tune | An airspeed above 28.0 m/s stops the auto-tune and the fan. | `[TUNE] Tuning aborted (airspeed above MAX_AIRSPEED) - fan stopped, target 0 m/s, gains unchanged` |
+| Sensor fault at start-up | The firmware halts with the fan off. The board LED blinks if the board has an `LED_BUILTIN` (see [HARDWARE.md](HARDWARE.md#check-the-sensors-at-start-up)). | `[FATAL] System halted with the fan off. Fix the fault and reset the board.` |
+| Blocked serial port | On a native USB port, the firmware waits at most 50 ms for a computer that does not read the port. It skips data lines, and other text is lost. Thus the stop command, the PID and the checks continue to work. | `Skipped:<n>` at the end of the next data line; `[WARN] <n> bytes of output lost: the host did not read` |
+| Input check | The firmware accepts only plain decimal numbers. A typing error cannot become a fan speed. | `[ERROR] Unknown command or wrong number of values: ...` |
 
 ---
 
-## Quick Command Reference
+## Quick start (Arduino IDE)
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `<number>` | Set target airspeed | `10` |
-| `tune` | Auto-tune (auto PWM) | `tune` |
-| `tune <L> <H>` | Auto-tune (manual PWM) | `tune 40 100` |
-| `tune <Kp> <Ki> <Kd>` | Manual PID | `tune 20 8 12` |
-| `stune` | sTune auto-tune (advanced) | `stune` |
-| `recal` | Recalibrate sensor | `recal` |
-| `recal <N>` | Recalibrate (N samples) | `recal 100` |
-| `avg <N>` | Set averaging | `avg 10` |
+1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software).
+2. Open **Tools > Board > Boards Manager**. Install the board package:
+   - ESP32-P4: **esp32 by Espressif Systems**, version 3.3.12 (the version that the CI build uses). If the package is not in the list, add `https://espressif.github.io/arduino-esp32/package_esp32_index.json` in **File > Preferences > Additional boards manager URLs**.
+   - Uno R4: **Arduino UNO R4 Boards**.
+3. Select the board in **Tools > Board**:
+   - ESP32-P4: **ESP32P4 Dev Module**. For the M5Stack Tab5, also read [M5Stack Tab5 I2C pins](HARDWARE.md#m5stack-tab5-i2c-pins).
+   - Uno R4: **Arduino UNO R4 Minima** or **Arduino UNO R4 WiFi**.
+4. ESP32-P4 only: select **Tools > Chip Variant**: **Before v3.00** (default) or **v3.00 or newer**. The Chip Variant must match the chip revision of your ESP32-P4. The upload output of esptool shows the chip revision.
+5. Open **Tools > Manage Libraries**. Install QuickPID, sTune, DFRobot_LWLP, DFRobot_BMP58X, and DFRobot_RTU in the versions that [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md#libraries) gives.
 
-## User-configurable variables (runtime & compile-time) 
+   NOTE: DFRobot_BMP58X needs DFRobot_RTU. If the Library Manager does not show a version, download that version (Git tag) from GitHub. Then use **Sketch > Include Library > Add .ZIP Library**.
+6. Wire the sensors and the fan as [HARDWARE.md](HARDWARE.md) shows.
+7. Open `EDU-Wind-Tunnel/EDU-Wind-Tunnel.ino`. Keep all files of the `EDU-Wind-Tunnel` folder together.
+8. Disconnect the fan power.
+9. Select the port in **Tools > Port**.
+10. Click **Upload**.
+11. Open **Tools > Serial Monitor**. Set the speed to **115200 baud**. All line-ending settings work.
 
-### Runtime Commands (via serial)
-- Direct setpoint: type a number (m/s) to set target.
-- `avg <N>`  
-  - Purpose: set pressure averaging samples (1–50). Default 20.  
-  - Effect: lower → faster but noisier; higher → smoother but more lag.  
-  - Typical: `avg 3` for fast tuning, `avg 15–30` for stable operation.
+    NOTE: With **No Line Ending**, a command runs 1.0 to 1.2 s after its last character. This is also true for `0` and `stop`. Do not pause for 1 s or more in a command. For the fastest stop, select **New Line**.
 
-- `tune` / `tune <low> <high>` / `tune <Kp> <Ki> <Kd>`  
-  - `tune` : auto-estimate PWM band and run relay tuning.  
-  - `tune <low> <high>` : force PWM range (manual). Use when auto-estimate is poor.  
-  - `tune <Kp> <Ki> <Kd>` : manually apply PID gains; controller resets automatically.
+    NOTE: After the board receives the first line ending (CR or LF), the 1 s timeout is off until the next reset. If you then change to **No Line Ending**, reset the board.
+12. Reset the board. Keep the tunnel still: no airflow, both pitot ports open to the room. The start-up does these steps:
+    - The firmware waits 2 s for the Serial Monitor. Then it shows the version and the board.
+    - It starts the I2C bus and searches for the sensors. The scan shows only the barometric sensor (`0x47` or `0x46`). The differential pressure sensor (address `0x00`) is not in the scan. This is normal.
+    - It calibrates the differential pressure sensor with the fan stopped: a 15 s wait, then 50 samples. This takes about 23 s.
+    - It shows `[READY] System initialized`, the command list, and then one data line every 200 ms.
 
-- `stune` (requires sTune library)
-  - Advanced autotuning using inflection point method
-  - More stable and predictable than relay tuning
-  - Automatically determines step size and monitors system response
-  - Default: "No Overshoot" tuning for stable operation
-  - Usage: Set target airspeed (min 2 m/s), then type `stune`
-  - Duration: ~30-60 seconds depending on system response
-  - **Tuning method can be changed** at compile-time (see below)
+    NOTE: Do not type commands before `[READY]`. The firmware ignores the input of the first 2 s. It runs later input only after `[READY]`.
 
-### Compile-time (edit `EDU-Wind-Tunnel.ino`)
-Open the sketch and edit the configuration block near the top:
+    Example (simulated ESP32-P4; your values are different, `[...]` marks removed lines):
 
-- **`PlatformConfig.h`** – controls all board-specific pin defaults.  Edit this
-  file if your wiring differs from the defaults:
-  - M5 Atom Stack: `DEFAULT_PWM_PIN 19`, `DEFAULT_TACH_PIN 23`, I2C on GPIO 26/32 (Grove)
-  - Generic ESP32-S3: `DEFAULT_PWM_PIN 10`, `DEFAULT_TACH_PIN 11`, I2C on GPIO 8/9
-  - ESP32-P4 (Waveshare): `DEFAULT_PWM_PIN 6`, `DEFAULT_TACH_PIN 5`, I2C on GPIO 7/8
-  - Generic ESP32: `DEFAULT_PWM_PIN 9`, `DEFAULT_TACH_PIN 2`, I2C on GPIO 21/22
-  - Classic Arduino: `DEFAULT_PWM_PIN 9`, `DEFAULT_TACH_PIN 2` (board defaults)
+    ```
+    =====================================
+       EDU Wind Tunnel PID Controller v1.3
+       Board: ESP32-P4
+    [...]
+    [INIT] I2C bus... OK (SDA 7, SCL 8, 100 kHz)
+    [...]
+     - Found device at 0x47
+     - Total devices found on Wire: 1
+    [...]
+    [INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)... OK (on Wire)
+            Averaging: 5 samples
+    [INIT] BMP585 barometer (DFRobot SEN0665)... OK (0x47 on Wire)
+            Temp: 20.0 C, air density: 1.204 kg/m3
+    [...]
+    [CALIB] Pressure Sensor Calibration
+    [...]
+            Taking 50 samples: ..................................................
+    [...]
+    [READY] System initialized
+    [...]
+    0s | V:0.90 | SP:0.00 | PWM:0 | P:0.48 | Temp:20.0 | Err:-0.90
+    ```
+13. After `[READY]`, connect the fan power.
+14. Type `5` to set a target airspeed of 5 m/s. Make sure that `V` moves to `SP`.
+15. Type `0` to stop the fan.
+16. Tune the controller on your tunnel. Follow [TUNING_GUIDE.md](TUNING_GUIDE.md).
 
-- `const sTune::TuningMethod STUNE_METHOD = sTune::NoOvershoot_PID;`
-  - Selects the sTune tuning method (default: NoOvershoot_PID for stability)
-  - Available options:
-    - `sTune::ZN_PID` - Ziegler-Nichols (moderate overshoot, fast response)
-    - `sTune::DampedOsc_PID` - Damped Oscillation (balanced)
-    - `sTune::NoOvershoot_PID` - No Overshoot (conservative, stable) **[DEFAULT]**
-    - `sTune::CohenCoon_PID` - Cohen-Coon (good for systems with delay)
-    - `sTune::Mixed_PID` - Mixed (average of all methods)
-  - For PI control instead of PID: use ZN_PI, DampedOsc_PI, NoOvershoot_PI, etc.
+## PlatformIO (alternative)
 
-- `const int PRESSURE_OVERSAMPLES = 5;`  
-  - Oversampling per measurement (3–8 typical).
+1. Install [VS Code](https://code.visualstudio.com/) and the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode).
+2. Wire the sensors and the fan as [HARDWARE.md](HARDWARE.md) shows.
+3. Open the repository folder. PlatformIO reads `platformio.ini` and installs the five libraries (same versions, from their Git tags).
+4. Select the environment for your board:
 
-- `int pressureAverageSamples = 20;`  
-  - Averaging window for measurements (1–50). Effective lag ≈ updateInterval × pressureAverageSamples.
+   | Environment | Board |
+   |---|---|
+   | `esp32p4` (default) | ESP32-P4, chip revision before v3.0 |
+   | `esp32p4_r3` | ESP32-P4, chip revision v3.0 or newer |
+   | `uno_r4_minima` | Arduino Uno R4 Minima |
+   | `uno_r4_wifi` | Arduino Uno R4 WiFi |
 
-- `const unsigned long updateInterval = 200;`  
-  - Main loop period in ms (default 200 ms). If changed, QuickPID sample time will be set from this.
+5. Disconnect the fan power.
+6. Upload: `pio run -e esp32p4 -t upload`. Use the name of your environment.
+7. Open the serial monitor: `pio device monitor`. `platformio.ini` sets the speed (115200 baud).
+8. Continue with steps 12 to 16 of the Arduino IDE quick start.
 
-- `int calibrationSamples = 50;`  
-  - Samples used for zero-offset calibration at startup/recal.
+---
 
-- `const float MAX_AIRSPEED = 28.0;`  
-  - Upper bound for setpoints; change if your tunnel differs.
+## Commands
 
-- `const float MAX_PWM_CHANGE_PER_CYCLE = 25.0;`  
-  - PWM slew limit per update cycle; set to 255 to disable.
+Type one command on a line. Then send the line (press Enter).
 
-- `float relayHysteresis = 0.5;`  
-  - m/s hysteresis for relay auto-tune to prevent chattering.
+| Command | What it does | Limits and notes |
+|---|---|---|
+| `<m/s>`, for example `10` | Sets the target airspeed. The controller continues from the present PWM value. | 0 to the sensor limit (28.0 m/s, or less in dense air; `help` shows the present limit). Reply: `[SERIAL] New target: 10.00 m/s` |
+| `0` or `stop` | Stops the fan now: PWM value 0, target airspeed 0. Stops a running auto-tune; the gains do not change. | Works in all modes. `0` must be the only word. Any line that starts with the word `stop` works, for example `stop now`. |
+| `tune` | Relay auto-tune. The firmware selects the two PWM levels. | Set a target airspeed of at least 2.0 m/s first. The target plus 0.5 m/s must not be more than the sensor limit. |
+| `tune <low> <high>` | Relay auto-tune with your PWM levels, for example `tune 40 100`. | Same as `tune`. Whole numbers 1-255. `<low>` must be less than `<high>`. |
+| `tune <Kp> <Ki> <Kd>` | Sets the PID gains, for example `tune 20 8 12`. | Kp more than 0, Ki and Kd 0 or more. Values outside Kp 1-100, Ki 0.1-50, Kd 0.1-50 change to the nearest limit. |
+| `stune` | sTune step-response auto-tune. | Set a target airspeed of at least 2.0 m/s first. |
+| `recal` or `recal <N>` | Stops the fan, waits 15 s, and takes `<N>` samples for a new zero offset. The target airspeed stays 0. | `<N>` = 5-100, default 50. The firmware reads no commands during `recal`. |
+| `avg <N>` | Sets the length of the moving average of the pressure. | 1-50, default 5. A longer average adds delay to the control loop. |
+| `help` | Shows the command list. | |
 
-- `const int PWM_pin = 9;` and `const int TACH_pin = 2;`  
-  - Pin assignments; change if wiring differs.
+Rules:
 
-- `const float MIN_TUNE_SETPOINT = 2.0;` and `const int REQUIRED_CYCLES = 3;`  
-  - Minimum auto-tune setpoint and cycles needed for a valid tune.
+- Keywords are not case-sensitive (`Stop`, `TUNE`). Spaces or tabs separate the words.
+- Type numbers as plain decimals: `12`, `-3`, `7.5`. The firmware does not accept `1e3`, `10abc`, or `1,5`.
+- A line can have 63 characters or fewer. The firmware ignores a longer line and shows `[ERROR] Line too long (max 63 characters) - ignored`.
+- During an auto-tune, the firmware accepts only `0` or `stop`. Other commands (also `help`) get `[BUSY] Tuning in progress - type 0 or stop to abort`.
+- The firmware reads commands once per update (200 ms).
+- The firmware does not store the gains or the averaging length. After a reset, it uses the defaults again (see [Configuration](#configuration)). After an auto-tune, the firmware shows a command that sets the same gains again, for example `[TUNE] To reuse these gains later: tune 16.851 7.263 14.660`.
 
-Data output format
-These can be quickly plotted using the Arduino IDE Serial Plotter or logged for later processing in a .csv format.
-Example line printed periodically:
+[TUNING_GUIDE.md](TUNING_GUIDE.md) tells how to use `tune`, `stune`, and manual gains, and what the auto-tunes show.
+
+## Serial output
+
+The firmware shows one data line per update (every 200 ms):
+
 ```
-123s | V:10.23 | T:10.00 | PWM:127 | P:61.45 | T:24.5°C | Err:-0.23
-
-elapsed time | airspeed (m/s) | target (m/s) | PWM (0–255) | differential pressure (Pa) | ambient temp (°C) | error (m/s)
-```
----
-
-## Serial Control from Android
-
-Once the sketch is compiled and uploaded, it can be controlled via a USB connection to an Android phone using the excellent [Serial USB Terminal App by Kair Morichi](https://www.kai-morich.de/android/).
-
-1. Connect via a USB cable with whatever adapters or USB-C hubs are required for your particular phone and board.
-
-2. Set the Baud Rate to 115200 and operate as you would from the Arduino IDE
-
-3. It is recommended that you set macros in the app according to the Quick Command Reference table above.
-
----
-
-## I2C Device Scanner
-
-The system includes an automatic I2C device scanner that runs at startup to help verify sensor connections. The scanner automatically detects and scans all available I2C buses on your board:
-
-- **ESP32 / ESP32-S3 / ESP32-P4 / ESP32-PICO (M5 Atom)**: Scans Wire only; Wire is initialised with the SDA/SCL pins defined in `PlatformConfig.h`
-- **Classic Arduino (Uno, Nano, Mega)**: Scans Wire only
-- **Arduino Uno Rev4**: Scans Wire and Wire1
-- **Modern Boards (RP2040, SAMD21/51)**: Scans Wire and Wire1
-- **Arduino GIGA R1**: Scans Wire, Wire1, and Wire2
-
-### Expected Output
-
-On successful startup, you should see:
-```
-[I2C] Multi-Bus Scanner
-=====================================
-Available I2C buses: 2
-Scanning I2C bus Wire
- - Found device at 0x47
- - Total devices found on Wire: 1
-
-Scanning I2C bus Wire1
- - No I2C devices found on Wire1
-
-[I2C] Scan complete
-=====================================
+<t>s | V:<m/s> | SP:<m/s> | PWM:<0-255> | P:<Pa> | Temp:<C> | Err:<m/s>
 ```
 
-The DFRobot SEN0665 (BMP585) barometer should appear at address `0x47` (or `0x46` if the address jumper is changed).
-The DFRobot SEN0343 (LWLP5000) differential pressure sensor uses I2C address `0x00` (a fixed hardware address) and will **not** appear in the bus scan — it is initialised directly and its absence from the scan is expected and normal.
+Example (simulation, target airspeed 10 m/s):
 
-If the BMP585 is not found, check:
-- I2C wiring (SDA/SCL connections)
-- Device power supply (3.3 V)
-- Pull-up resistors (typically built into breakout boards)
+```
+59s | V:10.01 | SP:10.00 | PWM:85 | P:60.28 | Temp:20.0 | Err:-0.01
+59s | V:10.01 | SP:10.00 | PWM:85 | P:60.34 | Temp:20.0 | Err:-0.01
+60s | V:10.02 | SP:10.00 | PWM:84 | P:60.41 | Temp:20.0 | Err:-0.02 | Kp:25.0 Ki:10.0 Kd:15.0 Avg:5
+60s | V:10.02 | SP:10.00 | PWM:85 | P:60.44 | Temp:20.0 | Err:-0.02
+```
 
----
+| Field | Meaning | Unit |
+|---|---|---|
+| `<t>s` | Time since `[READY]`, in whole seconds (includes the time of `recal`) | s |
+| `V:` | Airspeed, from the averaged pressure and the air density. Never negative. | m/s |
+| `SP:` | Target airspeed | m/s |
+| `PWM:` | PWM value sent to the fan | 0-255 |
+| `P:` | Averaged differential pressure minus the calibration offset. Small negative values with no airflow are normal. | Pa |
+| `Temp:` | Air temperature from the barometric sensor | deg C |
+| `Err:` | `SP` minus `V` | m/s |
 
-## 📄 License
-Derived from the Modular Wind Tunnel for STEM Education by Jerrod H. under a Creative Commons4.0 License
+Additional parts at the end of a data line:
 
-This project uses open-source libraries:
-- QuickPID (MIT License)
-- DFRobot_BMP58X (MIT License) — for DFRobot SEN0665 (BMP585 barometer)
-- DFRobot_LWLP (MIT License) — for DFRobot SEN0343 (LWLP5000 differential pressure sensor)
-- sTune (MIT License) - Optional advanced autotuning library by David Lloyd
+- ` | Kp:<Kp> Ki:<Ki> Kd:<Kd> Avg:<N>`: the present gains and averaging length. Every 20th line in PID mode (no auto-tune running), thus every 4 s.
+- ` | Skipped:<n>`: the number of data lines that the firmware did not show, because the computer did not read the serial port. This occurs only on a native USB port: the Uno R4 Minima, and the ESP32-P4 with **Tools > USB CDC On Boot: Enabled**.
 
-See individual library licenses for details.
+On these ports, the firmware waits at most 50 ms for the computer to read. Other text that does not fit into the transmit buffer in this time is lost. When the computer reads again, the next text starts with `[WARN] <n> bytes of output lost: the host did not read`.
 
----
+During an auto-tune, the data lines start differently:
+
+```
+[TUNE] 16s | Cycle:2 | V:10.55 | SP:10.00 | PWM:60 | P:66.97 | Temp:20.0 | Err:-0.55
+[sTune] SETTLING | V:9.97 | SP:10.00 | PWM:48 | P:59.88 | Temp:20.0 | Err:0.03
+```
+
+`[TUNE] <t>s` is the time since the start of the relay auto-tune. `Cycle:` is the number of valid cycles. `[sTune]` shows the phase: `SETTLING` or `TESTING`.
+
+Most other lines start with a tag, for example `[SERIAL]`, `[STOP]`, `[WARN]`, `[ERROR]`, or `[FATAL]`. Each line ends with CR LF.
+
+## Configuration
+
+To change a default, edit the constant, then upload again. The `.ino` constants are in the "Settings" section at the top of the file.
+
+| Name | File | Default | Meaning |
+|---|---|---|---|
+| `MAX_AIRSPEED` | `EDU-Wind-Tunnel.ino` | 28.0 m/s | Highest target airspeed. Over-speed limit of both auto-tunes. |
+| `DEFAULT_AVG_SAMPLES` | `EDU-Wind-Tunnel.ino` | 5 | Length of the moving average at start-up (1 s window, 0.4 s mean delay). |
+| `DEFAULT_CALIB_SAMPLES` | `EDU-Wind-Tunnel.ino` | 50 | Samples for the start-up calibration and for `recal`. |
+| `CALIBRATION_SETTLE_S` | `EDU-Wind-Tunnel.ino` | 15 s | Wait before the calibration samples. |
+| `DEFAULT_KP`, `DEFAULT_KI`, `DEFAULT_KD` | `EDU-Wind-Tunnel.ino` | 25.0, 10.0, 15.0 | PID gains at start-up. |
+| `KP_MIN`, `KP_MAX`, `KI_MIN`, `KI_MAX`, `KD_MIN`, `KD_MAX` | `EDU-Wind-Tunnel.ino` | 1.0-100.0, 0.1-50.0, 0.1-50.0 | Gain limits for `tune <Kp> <Ki> <Kd>` and both auto-tunes. |
+| `MAX_PWM_CHANGE_PER_CYCLE` | `EDU-Wind-Tunnel.ino` | 25 | Largest change of the PWM value per update in PID mode. |
+| `MIN_TUNE_SETPOINT` | `EDU-Wind-Tunnel.ino` | 2.0 m/s | Lowest target airspeed for `tune` and `stune`. |
+| `FAN_PWM_PIN` | `PlatformConfig.h` | 6 (ESP32-P4), 9 (Uno R4) | Fan PWM output pin. |
+| `I2C_SDA_PIN`, `I2C_SCL_PIN` | `PlatformConfig.h` | -1 | -1 = the default I2C pins of the selected board. Change them only on the ESP32-P4. On the Uno R4 they must stay -1. |
+| `FAN_PWM_FREQUENCY_HZ` | `PlatformConfig.h` | 25000 (ESP32-P4), 0 (Uno R4) | Fan PWM frequency in Hz. 0 = core default (490 Hz on the Uno R4). |
+
+[TUNING_GUIDE.md](TUNING_GUIDE.md#settings) gives the auto-tune settings (for example `STUNE_METHOD`). [HARDWARE.md](HARDWARE.md#pin-assignments) describes the pins.
+
+## Troubleshooting
+
+| Symptom | Possible cause | Action |
+|---|---|---|
+| `[FATAL] Differential pressure sensor not responding` at start-up. The fan stays off. | The differential pressure sensor is not connected correctly. | Check the SEN0343 wiring and power. Reset the board. |
+| `[FATAL] Barometer not found` or `[FATAL] Barometer not responding` at start-up | The barometric sensor is not connected correctly. | Check the SEN0665 wiring and power. Reset the board. |
+| `[FATAL] I2C bus could not be started - check I2C_SDA_PIN/I2C_SCL_PIN in PlatformConfig.h` (ESP32-P4) | Incorrect I2C pins | Set the correct I2C pins in `PlatformConfig.h`, or set them to -1. |
+| ` - Scan aborted at address 0x... (too many timeouts - bus likely has no pull-ups)` | No device or no pull-up resistors on the bus | Check the I2C wiring of that bus. |
+| `V` stays 0 and `P` is negative when the fan runs | The pitot tubes are connected to the wrong ports. | Interchange the two pitot tubes on the differential pressure sensor. |
+| `[STOP] Fan stopped, target 0 m/s (no airflow)` | A pitot tube is disconnected, or the fan has no power. | Check the pitot tubes, the fan power, and the PWM wiring. |
+| `[STOP] Fan stopped, target 0 m/s (no valid pressure data)` | The differential pressure sensor stopped responding. | Check the SEN0343 wiring. Then type `recal`. |
+| `V` shows a small value (for example `V:0.90`) with the fan stopped | Pressure noise near 0 Pa | This is normal. Type `recal` to zero the sensor again. |
+| The airspeed reading is noisy. | Short moving average | Type a larger value, for example `avg 10`. A longer average slows the control loop and can make it oscillate. Then reduce the gains or tune again (see [TUNING_GUIDE.md](TUNING_GUIDE.md#averaging-delay)). |
+| The airspeed oscillates around the target | The gains are too high for your fan. | Run `tune` or `stune`, or set lower gains. See [TUNING_GUIDE.md](TUNING_GUIDE.md#troubleshooting-by-symptom). |
+| `[TUNE] Tuning aborted (relay tune timeout) - ...` | The two PWM levels do not give airspeeds above and below the target. | Give the PWM levels, for example `tune 40 100`. See [TUNING_GUIDE.md](TUNING_GUIDE.md#relay-auto-tune-tune). |
+| Commands have no effect | Incorrect speed, or a change to **No Line Ending** after a line ending | Set 115200 baud. Reset the board. |
+
+## Limitations
+
+- The version 1.3 changes have tests in simulation only (simulated fan and sensors), not on hardware.
+- The default gains (Kp 25, Ki 10, Kd 15) are a starting point. They are validated only in simulation, where they were stable on 4 of 5 fan models. Tune the controller on your tunnel and make sure that it is stable.
+- The stop command (`0` or `stop`) does not work in these conditions:
+  - The line has more than 63 characters (also a line that starts with `stop`).
+  - `recal` runs (about 23 s with 50 samples). The fan is already stopped.
+  - The firmware halted after a `[FATAL]` message. The fan is off.
+- Each `stune` run loses at least 16 bytes of heap memory (a known problem of the sTune 2.4.0 library). Many runs fit into memory. A reset frees the memory.
+
+## Serial control from an Android phone
+
+You can control the firmware from an Android phone with the [Serial USB Terminal app by Kai Morich](https://www.kai-morich.de/android/).
+
+1. Connect the phone to the board with a USB cable. Use the adapters or USB-C hubs that your phone and board need.
+2. Set the speed to 115200 baud. All line-ending settings work.
+3. Make macros for the commands that you use frequently (see [Commands](#commands)).
+
+## Documentation map
+
+| File | Content |
+|---|---|
+| [HARDWARE.md](HARDWARE.md) | Tunnel changes, parts list, pins, wiring, pitot tubes |
+| [TUNING_GUIDE.md](TUNING_GUIDE.md) | How the controller works, manual tuning, relay auto-tune, sTune |
+| [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) | Library versions and licenses, tunnel design license |
+| [platformio.ini](platformio.ini) | PlatformIO environments and library versions |
+| [.github/workflows/compile-sketch.yml](.github/workflows/compile-sketch.yml) | CI workflow "Compile sketch". It compiles the firmware for the ESP32-P4 (both chip variants), the Uno R4 Minima and the Uno R4 WiFi on each push and pull request. |
+| `3D Print Files/` | Changed tunnel parts with static pressure taps |
+
+## Planned
+
+These items are not part of the firmware yet:
+
+- Control without a computer, with Modulino controls and a screen
+- A [Controllino](https://www.controllino.com) PLC version for industrial applications and education
+- A controller that is compatible with [MathWorks Simulink](https://www.mathworks.com/products/simulink.html) and [JuliaHub Dyad](https://juliahub.com/products/dyad)
+- An integrated lift and drag force balance
+- Course materials for wind tunnel operation and design
+
+## License and acknowledgments
+
+The firmware and the documentation use the MIT License (see [LICENSE](LICENSE)). [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) gives the licenses of the libraries and of the tunnel design. The tunnel design license also applies to the files in `3D Print Files/`.
+
+Thanks to:
+
+- Jerrod Hofferth for the wind tunnel design
+- David Lloyd (Dlloydev) for the QuickPID and sTune libraries
+- DFRobot for the sensor libraries
+- The Arduino and Espressif communities for board and library support
 
 ## Support
-This code is provided with no warranty or expectation of support. If you post something in the issues or discussion sections of GitHub I or another community member may be able to resolve your question. 
-This is an initial release so the documentation and best practices are still evolving. If you have contributions, please fork, tweak, pull, and merge at your discretion.
 
-- **Issues**: [GitHub Issues](https://github.com/Low-Boom/EDU-wind-tunnel/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/Low-Boom/EDU-wind-tunnel/discussions)
+This code comes with no warranty and no promise of support. Ask your questions in GitHub Issues or Discussions. The authors or other users can help when they have time. To contribute, fork the repository and open a pull request.
 
----
-
-## Acknowledgments
-- Jerrod H. for the Wind Tunnel Design
-- QuickPID Library by Dlloydev
-- sTune Library by Dlloydev
-- DFRobot for the BMP58X (SEN0665) and LWLP (SEN0343) sensor libraries
-- Arduino and Espressif communities for board and library support
+- Issues: [GitHub Issues](https://github.com/Low-Boom/EDU-wind-tunnel/issues)
+- Discussions: [GitHub Discussions](https://github.com/Low-Boom/EDU-wind-tunnel/discussions)

@@ -1,9 +1,8 @@
 /*
  * I2CScanner.h
  * 
- * Multi-bus I2C scanner utility for Arduino platforms
- * Automatically detects and scans all available I2C buses (Wire, Wire1, Wire2)
- * based on WIRE_INTERFACES_COUNT macro.
+ * Multi-bus I2C scanner: scans Wire (and Wire1 where the board has it)
+ * and remembers which bus each device was found on.
  * 
  * Copyright (c) 2025 Low-Boom
  * Licensed under MIT License
@@ -15,36 +14,20 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// Maximum number of I2C devices that can be tracked
-#define MAX_I2C_DEVICES 20
-
-// Structure to store device location
-struct I2CDeviceInfo {
-    uint8_t address;
-    TwoWire* bus;
-    const char* busName;
-};
-
 /**
  * Scan all available I2C buses and report found devices
  * 
- * Automatically detects number of I2C buses using WIRE_INTERFACES_COUNT:
- * - Classic Uno/Nano/Mega: Scans Wire only
- * - Arduino Uno Rev4: Scans Wire1, then Wire
- * - ESP32 / ESP32-S3 / ESP32-P4 / ESP32-PICO: Scans Wire only (WIRE_INTERFACES_COUNT not
- *   defined by default; Wire is initialised with explicit SDA/SCL from PlatformConfig.h)
- * - RP2040/SAMD: Scans Wire1, then Wire
- * - Arduino GIGA (H7): Scans Wire1, Wire2, then Wire
+ * Buses scanned (from WIRE_INTERFACES_COUNT):
+ * - Uno R4 WiFi: Wire1 (Qwiic connector), then Wire
+ * - Uno R4 Minima: Wire only
+ * - ESP32-P4: Wire only (the core does not define WIRE_INTERFACES_COUNT;
+ *   the sketch starts Wire with the pins from PlatformConfig.h)
  * 
- * Includes early abort logic to prevent long delays when scanning empty buses:
- * - Uses short timeout (1ms) for each I2C transaction
- * - Aborts scan after 10 consecutive timeouts (bus has no pull-ups)
- * - Typical scan time: <1 second for empty bus, <3 seconds for full scan
+ * Early abort keeps scans of empty buses short:
+ * - 25 ms timeout per I2C transaction
+ * - The scan of a bus stops after 10 consecutive timeouts (no pull-ups)
  * 
- * On multi-bus boards, Wire1 is scanned first to find sensors quickly,
- * then Wire is scanned last (may abort early if empty).
- * 
- * Initializes all available I2C buses before scanning.
+ * On the Uno R4 WiFi, Wire1 is initialised and scanned before Wire.
  * 
  * For each address 1-126, performs beginTransmission() and checks
  * endTransmission() == 0 to detect device presence.
@@ -54,9 +37,9 @@ struct I2CDeviceInfo {
  * 
  * Safe to call even if Wire.begin() already called with custom pins.
  * 
- * @param out Output stream for results (typically Serial)
+ * @param out Where the results are printed (the sketch passes SerialOut)
  */
-void scanAllI2CBuses(Stream &out);
+void scanAllI2CBuses(Print &out);
 
 /**
  * Find which I2C bus a device with the given address is on
@@ -71,18 +54,14 @@ void scanAllI2CBuses(Stream &out);
 TwoWire* getDeviceBus(uint8_t address, const char** busName = nullptr);
 
 /**
- * Get count of devices found during last scan
- * 
- * @return Number of I2C devices in the registry
+ * Probe one address directly on every bus the scanner uses: Wire first,
+ * then Wire1 where the board has it. For devices the scan does not cover,
+ * e.g. the LWLP5000 at the general-call address 0x00.
+ *
+ * @param address I2C address to probe
+ * @param busName Pointer to store the bus name (e.g., "Wire1")
+ * @return Pointer to the first bus on which the address ACKs, or nullptr
  */
-int getDeviceCount();
-
-/**
- * Get device info by index
- * 
- * @param index Index in the device registry (0 to getDeviceCount()-1)
- * @return Pointer to device info, or nullptr if index out of range
- */
-const I2CDeviceInfo* getDeviceInfo(int index);
+TwoWire* probeDeviceBus(uint8_t address, const char** busName = nullptr);
 
 #endif // I2C_SCANNER_H

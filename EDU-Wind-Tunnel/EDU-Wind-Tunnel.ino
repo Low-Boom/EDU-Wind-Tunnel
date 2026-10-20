@@ -1,1163 +1,1409 @@
-// Basic Arduino includes
+/*
+ * EDU-Wind-Tunnel.ino
+ *
+ * Closed-loop airspeed controller for a small educational wind tunnel.
+ *
+ *   pitot tube -> LWLP5000 differential pressure (Pa) --+
+ *   BMP585 barometer -> air density (kg/m3) ------------+-> airspeed (m/s)
+ *   airspeed -> QuickPID -> fan PWM (0-255)
+ *
+ * Every 200 ms the sketch reads the sensors, handles typed commands, runs
+ * the controller (or one of the two auto-tuners) and prints one data line:
+ *
+ *   <t>s | V:<m/s> | SP:<m/s> | PWM:<0-255> | P:<Pa> | Temp:<C> | Err:<m/s>
+ *
+ * Type `help` in the serial monitor (115200 baud) for the command list.
+ * Boards: ESP32-P4 and Arduino Uno R4 Minima / WiFi (see PlatformConfig.h).
+ *
+ * Copyright (c) 2025 Low-Boom
+ * Licensed under MIT License
+ */
+
 #include <Arduino.h>
 #include <Wire.h>
-
-// Platform-specific pin and hardware configuration (ESP32, M5 Atom, classic Arduino)
-#include "PlatformConfig.h"
-
-// Sensor libraries
-#include "DFRobot_BMP58X.h"
-#include <DFRobot_LWLP.h>
+#include <math.h>
 #include <QuickPID.h>
-#include "math.h"
-
-// sTune library and wrapper (optional - for advanced autotuning)
-#include <sTune.h>
-#include "STunePIDTuner.h"
-
-// I2C Scanner utility
+#include <DFRobot_LWLP.h>
+#include "DFRobot_BMP58X.h"
+#include "PlatformConfig.h"     // board pins: FAN_PWM_PIN, I2C pins, STATUS_LED_PIN
 #include "I2CScanner.h"
+#include "STunePIDTuner.h"
+#include "SerialOut.h"           // all text output (bounded wait), serialHasRoom()
 
-// sTune Configuration - User Selectable Tuning Method
-// Available methods:
-//   sTune::ZN_PID           - Ziegler-Nichols (moderate overshoot, fast response)
-//   sTune::DampedOsc_PID    - Damped Oscillation (balanced)
-//   sTune::NoOvershoot_PID  - No Overshoot (conservative, stable) [DEFAULT]
-//   sTune::CohenCoon_PID    - Cohen-Coon (good for systems with delay)
-//   sTune::Mixed_PID        - Mixed (average of all methods)
-// For PI control, use: ZN_PI, DampedOsc_PI, NoOvershoot_PI, CohenCoon_PI, Mixed_PI
-const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
+// ===========================================================================
+// Settings
+// ===========================================================================
 
-// MBED support
-// #include "mbed.h"
+const char FIRMWARE_VERSION[] = "1.3";
 
-#define SEALEVELPRESSURE_HPA (1013.25)
-#define DPS_ADDRESS 0x00   // DFRobot LWLP5000 (SEN0343) — fixed I2C address
-#define BMP_I2C_ADDRESS 0x47  // DFRobot BMP585 (SEN0665) — default I2C address (alt: 0x46)
+// Highest target. The LWLP5000 is rated to 500 Pa, which is 28.6 m/s at
+// sea-level air density (1.225 kg/m3); above that the reading is not valid.
+// In dense (cold) air the limit is lower; see maxAirspeed().
+const float MAX_AIRSPEED = 28.0;
 
-// PID gains - Full PID control
-float Kp = 25.0, Ki = 10.0, Kd = 15.0;
+// Control loop period. Sensors, commands, PID and the data line all run once
+// per interval; the PID's I and D terms are scaled for exactly this period.
+const unsigned long UPDATE_INTERVAL_MS = 200;
 
-// Pin assignments (platform defaults set in PlatformConfig.h – edit there to change)
-const int PWM_pin  = DEFAULT_PWM_PIN;    // Motor PWM control output
-const int TACH_pin = DEFAULT_TACH_PIN;   // Tachometer pulse input
-const int ENC_PPR = 2;
-const float kI = 1;
+// Pressure readings per update. Each LWLP read blocks for about 60 ms (the
+// library waits for the conversion), so more than one read would not fit
+// into the update interval; the moving average does the smoothing instead.
+const int PRESSURE_OVERSAMPLES = 1;
 
-const int MAX_PRESSURE = 14745.0;
-const float MIN_PRESSURE = 1638.0;
+// Moving average of the pressure (command: avg <N>)
+// 5 samples = 1 s window, mean delay 0.4 s. Longer windows add delay inside the
+// control loop: in simulation, 20 samples (mean delay 1.9 s) made the default
+// gains oscillate on 3 of 5 fan models, while 5 samples was stable on 4 of 5.
+// A longer window ('avg <N>') gives smoother readings but slows the control loop
+// and can make it oscillate; lower the gains if you use one.
+const int DEFAULT_AVG_SAMPLES = 5;
+const int MIN_AVG_SAMPLES = 1;
+const int MAX_AVG_SAMPLES = 50;
 
-const float MAX_AIRSPEED = 30.0;
-const float MIN_AIRSPEED = 0.0;
-const float Specific_gas_constant = 287.058;
-
-// Pressure sensor calibration
-float pressureOffset = 0.0;
-bool calibrated = false;
-int calibrationSamples = 50;  // Default calibration samples (adjustable)
+// Zero calibration of the pressure sensor (at start-up and: recal [N])
+const int DEFAULT_CALIB_SAMPLES = 50;
 const int MIN_CALIB_SAMPLES = 5;
 const int MAX_CALIB_SAMPLES = 100;
+const int CALIBRATION_SETTLE_S = 15;     // fan run-down + thermal settling
+const unsigned long CALIB_SAMPLE_SPACING_MS = 100;
 
-// Sensor oversampling configuration
-const int PRESSURE_OVERSAMPLES = 5;  // Read sensor 5 times per measurement
+// PID: default gains and the limits shared by manual entry and both tuners
+const float DEFAULT_KP = 25.0, DEFAULT_KI = 10.0, DEFAULT_KD = 15.0;
+const float KP_MIN = 1.0, KP_MAX = 100.0;
+const float KI_MIN = 0.1, KI_MAX = 50.0;
+const float KD_MIN = 0.1, KD_MAX = 50.0;
+// Largest PWM change per update in PID mode (and at the hand-over after a
+// relay tune); keeps the fan (and its supply) from jumping between full and
+// zero power. Stop, the relay levels and the sTune steps bypass it.
+const int MAX_PWM_CHANGE_PER_CYCLE = 25;
 
-// Pressure sensor averaging configuration
-int pressureAverageSamples = 20;  // Default: 20 samples
-int savedAverageSamples = 20;     // Saved value during auto-tune
-const int MAX_AVG_SAMPLES = 50;   // Maximum: 50 samples
-const int MIN_AVG_SAMPLES = 1;
-float pressureBuffer[MAX_AVG_SAMPLES];
+// Auto-tuning
+const float MIN_TUNE_SETPOINT = 2.0;     // m/s; below this the pitot signal is too small
+// Rough fan sensitivity, PWM per m/s of target. Both tuners use it to guess
+// their PWM levels before they have measured the fan.
+const float FAN_PWM_PER_MPS_ESTIMATE = 8.0;
+
+// Relay auto-tune (Astrom-Hagglund): switch the PWM between a low and a high
+// level whenever the airspeed leaves a band around the target. The resulting
+// steady oscillation gives the ultimate gain Ku and period Tu.
+const float RELAY_HYSTERESIS = 0.5;               // m/s band around the target
+const int REQUIRED_CYCLES = 3;                    // valid cycles to average
+const float MIN_CYCLE_AMPLITUDE = 0.5;            // m/s; smaller swings are noise
+const unsigned long MIN_CYCLE_PERIOD_MS = 2000;   // shorter "cycles" are noise
+const unsigned long RELAY_TIMEOUT_MS = 120000;
+// "tune" without a PWM range: the relay levels are the estimated PWM for the
+// target -/+ RELAY_AUTO_PWM_OFFSET, kept within these limits. If the estimate
+// does not suit your fan, give the range by hand (tune <low> <high>).
+const int RELAY_AUTO_PWM_OFFSET = 20;
+const int RELAY_AUTO_LOW_MIN = 20, RELAY_AUTO_LOW_MAX = 150;
+const int RELAY_AUTO_HIGH_MIN = 40, RELAY_AUTO_HIGH_MAX = 245;
+
+// sTune auto-tune (open-loop step test, inflection point method). Methods:
+//   sTune::ZN_PID          Ziegler-Nichols (fast, moderate overshoot)
+//   sTune::DampedOsc_PID   Damped oscillation (balanced)
+//   sTune::NoOvershoot_PID No overshoot (conservative)
+//   sTune::CohenCoon_PID   Cohen-Coon (for processes with dead time)
+//   sTune::Mixed_PID       Average of the four rules above (used here)
+// PI versions: ZN_PI, DampedOsc_PI, NoOvershoot_PI, CohenCoon_PI, Mixed_PI
+const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
+// Test time: sTune's model scales with it (its tangent window is 6 % of the
+// samples), so it must be close to the fan's time constant. On the harness
+// plant grid (time constant incl. averaging 1.7-5.2 s) 15 s identified tau
+// within -51..+171 % (60 s: +309..+1071 %) with the same closed-loop result;
+// 10 s underestimated slow fans by up to 79 % and the tuned loop oscillated.
+const uint32_t STUNE_TEST_TIME_S = 15;
+// One sample per update interval: a sample is a fresh pressure reading.
+const uint16_t STUNE_SAMPLES = STUNE_TEST_TIME_S * 1000 / UPDATE_INTERVAL_MS;
+// Step PWM: the estimated PWM for the target, kept in a range that gives a
+// clear response without running the fan flat out.
+const float STUNE_STEP_PWM_MIN = 60.0, STUNE_STEP_PWM_MAX = 200.0;
+// The step goes from STUNE_START_FRACTION x step PWM to the step PWM. The fan
+// holds the start PWM for STUNE_SETTLE_TIME_S first, long enough to reach it
+// from any earlier state (also from full speed: fans run down slowly).
+const float STUNE_START_FRACTION = 0.6;
+const uint32_t STUNE_SETTLE_TIME_S = 25;
+
+// Sensors
+const uint8_t LWLP_ADDRESS = 0x00;       // fixed (the I2C general-call address)
+const uint8_t BMP585_ADDRESS = 0x47;     // DFRobot SEN0665 default
+const uint8_t BMP585_ALT_ADDRESS = 0x46; // with the address jumper changed
+const float AIR_GAS_CONSTANT = 287.058;  // J/(kg K), specific gas constant of dry air
+const float SEA_LEVEL_AIR_DENSITY = 1.225;
+// LWLP5000 range. Its rating (500 Pa) is an airspeed limit that depends on
+// the air density; targets stay below 95 % of it (see maxAirspeed()).
+const float SENSOR_MAX_PRESSURE_PA = 500.0;
+const float SENSOR_USABLE_FRACTION = 0.95;
+// The LWLP library reports no read errors. On a dead bus every byte reads
+// 0xFF, which gives the full-scale code 0x3FFF; a working sensor gives it
+// only above +600 Pa, far outside its rating. Either way the reading is
+// invalid.
+const uint16_t LWLP_INVALID_CODE = 0x3FFF;
+
+// Safety checks (each stops the fan and sets the target to 0)
+const int MAX_INVALID_PRESSURE_READS = 5;            // in a row: 1 s without valid data
+const int NO_AIRFLOW_PWM = 250;                      // "full fan power" in PID mode
+const float NO_AIRFLOW_SPEED = 1.0;                  // m/s
+const unsigned long NO_AIRFLOW_TIMEOUT_MS = 15000;   // driven time without airflow
+
+// Serial input (one line is collected without blocking loop())
+const size_t SERIAL_LINE_SIZE = 64;      // buffer size incl. the terminating '\0'
+const int MAX_COMMAND_WORDS = 4;         // longest command: tune <Kp> <Ki> <Kd>
+// Until the first CR or LF arrives, a line also ends after this long without
+// a new character, so the serial monitor's "No line ending" setting works too.
+const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
+
+// Serial output (see SerialOut.h). Routine lines are printed only if they
+// fit completely into the transmit buffer and are skipped otherwise (see
+// serialHasRoom()), so they need a known maximum length.
+// Longest data line with all suffixes and CR LF: 138 characters (7-digit
+// uptime, |P| < 2400 Pa, V < 102 m/s, Temp -100.0, the largest gains,
+// Avg:50, 10-digit Skipped count). The limit must stay below the smallest
+// USB transmit buffer (256 bytes), or no data line would ever be printed.
+const int DATA_LINE_MAX_LENGTH = 160;
+const int STATUS_LINE_MAX_LENGTH = 64;   // longest relay switch or cycle line
+const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;   // at most one per 10 s
+
+// ===========================================================================
+// State
+// ===========================================================================
+
+// --- Sensors ---
+DFRobot_LWLP *lwlp = nullptr;            // differential pressure, created once its bus is known
+DFRobot_BMP58X_I2C *barometer = nullptr; // created once its address is known
+float pressureOffset = 0.0;              // Pa, zero error found by calibration
+float pressureBuffer[MAX_AVG_SAMPLES];   // moving-average ring buffer
+int pressureAverageSamples = DEFAULT_AVG_SAMPLES;
 int pressureBufferIndex = 0;
 bool pressureBufferFilled = false;
+int invalidPressureReads = 0;            // invalid readings in a row
+float airDensity = SEA_LEVEL_AIR_DENSITY;
+float airTemperatureC = 15.0;
 
-// Temperature correction
-float lastAirDensity = 1.225;  // Cache for display
-float lastTemperature = 15.0;  // Cache for display
+// --- Control ---
+// What loop() does with the fan: closed-loop PID or one of the auto-tuners.
+// Only one mode is active at a time, so tuning and PID never fight over PWM.
+enum ControlMode { MODE_PID, MODE_RELAY_TUNE, MODE_STUNE };
+ControlMode controlMode = MODE_PID;
+float currentAirspeed = 0;               // PID input, m/s
+float targetAirspeed = 0;                // PID setpoint, m/s
+float pidOutput = 0;                     // PID output (the tuners write it too), 0-255
+int fanPwm = -1;                         // PWM last written to the fan (-1 = never)
+float kp = DEFAULT_KP, ki = DEFAULT_KI, kd = DEFAULT_KD;
+QuickPID myPID(&currentAirspeed, &pidOutput, &targetAirspeed);
+unsigned long noAirflowDrivenMs = 0;     // driven time since airflow was last seen
 
-// Timing
-const unsigned long updateInterval = 200;  // 200ms update interval
-unsigned long lastUpdate = 0;
-unsigned long startTime = 0;
-
-unsigned int LastValidRPM = 0;
-unsigned long LastRPMUpdateTime = 0;
-const unsigned long RPM_TIMEOUT_MS = 1000;
-
-// PWM Rate Limiting (disabled during tuning)
-float lastPWMOutput = 0;
-const float MAX_PWM_CHANGE_PER_CYCLE = 25.0;
-
-// PID and control variables
-float currPWM = 0;
-float desiredAirSpeed = 0;
-float currentAirSpeed = 0;
-
-// Relay Auto-tuning configuration
-const float MIN_TUNE_SETPOINT = 2.0;
-bool autoTuning = false;
-float tuneSetpoint = 0.0;
-uint32_t tuneStartTime = 0;
-
-// Relay tuning state
-enum RelayState { RELAY_HIGH, RELAY_LOW };
-RelayState relayState = RELAY_HIGH;
-float relayOutputHigh = 0;
-float relayOutputLow = 0;
-float relayHysteresis = 0.5;  // m/s hysteresis band
-
-// Oscillation detection
-float peakHigh = -999;
-float peakLow = 999;
-unsigned long lastCrossingTime = 0;
-unsigned long oscillationPeriod = 0;
-int cycleCount = 0;
-const int REQUIRED_CYCLES = 3;  // Need 3 complete cycles
+// --- Relay auto-tune ---
+bool relayHigh = false;                  // true while the high PWM level is applied
+int relayPwmLow = 0;
+int relayPwmHigh = 0;
+unsigned long tuneStartTime = 0;
+unsigned long lastCrossingTime = 0;      // last HIGH->LOW switch
 bool firstCrossing = true;
+float peakHigh = 0.0;                    // airspeed extremes of the current cycle
+float peakLow = 0.0;
+int relayCycles = 0;                     // valid cycles measured so far
+float sumPeriodsS = 0.0;
+float sumAmplitudes = 0.0;
 
-// Accumulated measurements
-float sumPeriods = 0;
-float sumAmplitudes = 0;
-int validCycles = 0;
+// --- sTune auto-tune ---
+STunePIDTuner *sTuner = nullptr;         // created in setup()
 
-// Debug
-unsigned long debugCounter = 0;
+// --- Timing ---
+unsigned long lastUpdate = 0;
+unsigned long runStartTime = 0;          // for the time stamp of the data line
+unsigned long dataLineCount = 0;
+unsigned long lastSlowPassWarning = 0;
+unsigned long skippedDataLines = 0;      // since the last printed data line
 
-// sTune autotuning (optional alternative to relay tuning)
-STunePIDTuner *sTuner = nullptr;
-bool sTuneActive = false;
+// --- Serial command input ---
+char serialLine[SERIAL_LINE_SIZE];
+size_t serialLineLength = 0;
+bool serialLineTooLong = false;
+unsigned long lastSerialCharTime = 0;
+bool lineEndingSeen = false;             // a CR or LF has arrived: no idle timeout
 
+// ===========================================================================
 // Forward declarations
-void OnTachPulse();
-void initializeBarometer();
-void checkForUserAirspeedUpdate();
-void calibratePressureSensor(bool skipWait = false, int numSamples = -1);
-float readPressureSensorRawUncalibrated();
-float readPressureSensorRaw();
-float readPressureSensorOversampled();
-float readPressureSensorAveraged();
-float readBarometerSensor();
-float calcCurrentAirSpeed(float pressure, float AirDensity);
-unsigned int RPMcalc();
+// ===========================================================================
+
+// Sensors
+void initPressureSensor();
+void initBarometer();
+bool readPressureRaw(float &pressurePa);
+bool readPressureCorrected(float &pressurePa);
+float readPressureAveraged();
+void resetPressureAverage();
+void setPressureAverageSamples(int samples);
+void calibratePressureSensor(int numSamples);
+float readAirDensity();
+float calcAirspeed(float pressurePa, float density);
+float maxAirspeed();
+// Fan and PID
+void setFanPwm(int pwm);
+void setFanPwmRateLimited(int pwm);
+void stopFan();
+void stopAll(const char *reason);
+void pidBumplessStart();
+void runPidControl();
+bool applyGains(float newKp, float newKi, float newKd);
+float clampGain(const char *name, float value, float minValue, float maxValue);
+// Safety checks
+void checkPressureSensor();
+bool checkAirflow(bool fanDriven, const char *fanState);
+// Auto-tuning
+bool tuneTargetOk();
 void startRelayTune(int pwmLow = -1, int pwmHigh = -1);
 void runRelayTune();
-void setPressureAverageSamples(int samples);
+void setRelay(bool high);
+void recordRelayCycle();
+void completeRelayTune();
 void startSTune();
 void runSTune();
+void abortTuning(const char *reason);
+void finishTuning(float newKp, float newKi, float newKd);
+// Serial commands
+void pollSerialCommands();
+void endSerialLine();
+void handleCommand(char *line);
+int splitWords(char *line, char *words[], int maxWords);
+bool wordIs(const char *word, const char *keyword);
+bool parseDecimal(const char *text, float &value);
+bool parseWholeNumber(const char *text, int minValue, int maxValue, int &value);
+void setTargetAirspeed(float target);
+void setManualGains(const char *kpText, const char *kiText, const char *kdText);
+// Output
+void printBanner();
+void printHelp();
+void printDataLine(unsigned long now, float pressure);
+void warnIfSlowPass(unsigned long passMs);
+[[noreturn]] void haltWithError(const char *msg);
 
-QuickPID myPID(&currentAirSpeed, &currPWM, &desiredAirSpeed);
-
-DFRobot_LWLP lwlp;
-DFRobot_BMP58X_I2C *bmp58x = nullptr;
-
-volatile unsigned long LastPulseTime = 0;
-volatile unsigned long PulseInterval = 0;
-unsigned long PrevPulseInterval = 0;
-bool changed = false;
+// ===========================================================================
+// setup() and loop()
+// ===========================================================================
 
 void setup() {
+    // Drive the fan off before anything else: until pinMode() runs the PWM pin
+    // floats and some fan drivers read a floating input as "full speed".
+    pinMode(FAN_PWM_PIN, OUTPUT);
+    digitalWrite(FAN_PWM_PIN, LOW);
+    if (STATUS_LED_PIN >= 0) {
+        pinMode(STATUS_LED_PIN, OUTPUT);
+        digitalWrite(STATUS_LED_PIN, LOW);
+    }
+
     Serial.begin(115200);
-    delay(2000);
-    
-    while(Serial.available()) Serial.read();
-    
-    Serial.println("\n\n");
-    Serial.println("=====================================");
-    Serial.println("   EDU Wind Tunnel PID Controller v1.1");
-    Serial.println("   Sensors: DFRobot SEN0665 (BMP585) + SEN0343 (LWLP5000)");
-    Serial.println("   Build: 2025-11-09 00:08:20 UTC");
-    Serial.println("   User: Low-Boom");
-    Serial.println("=====================================");
-    Serial.flush();
-    delay(100);
+    delay(2000);                         // give the serial monitor time to connect
+    while (Serial.available()) Serial.read();
+    printBanner();
 
-    // Initialize pressure buffer
-    for (int i = 0; i < MAX_AVG_SAMPLES; i++) {
-        pressureBuffer[i] = 0.0;
-    }
-
-    // Initialize I2C
-    Serial.print("[INIT] I2C bus...");
-    #if I2C_SDA_PIN >= 0
-        Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);  // ESP32: explicit SDA/SCL
+    // I2C. Keep the core default clock (100 kHz standard mode): both sensors
+    // support it and it is more forgiving of long sensor wires than 400 kHz.
+    SerialOut.print("[INIT] I2C bus...");
+    #if defined(ARDUINO_ARCH_ESP32)
+        bool i2cStarted = Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);   // -1 = board default
+        int sdaPin = (I2C_SDA_PIN >= 0) ? I2C_SDA_PIN : SDA;
+        int sclPin = (I2C_SCL_PIN >= 0) ? I2C_SCL_PIN : SCL;
+        unsigned long clockKHz = Wire.getClock() / 1000;
     #else
-        Wire.begin();                            // Classic Arduino: use board defaults
+        Wire.begin();                    // Uno R4: fixed pins, returns nothing
+        bool i2cStarted = true;
+        int sdaPin = SDA, sclPin = SCL;
+        unsigned long clockKHz = 100;    // Wire.begin() always sets 100 kHz (no getter)
     #endif
-    Wire.setClock(400000);
-    Serial.println(" OK (400kHz)");
-    delay(100);
-
-    // Scan all I2C buses for connected devices
-    scanAllI2CBuses(Serial);
-    
-    // Configure differential pressure sensor (DFRobot SEN0343 / LWLP5000)
-    // The LWLP5000 uses I2C address 0x00 (fixed), which is not scanned by the
-    // standard I2C bus scanner.  Initialize it directly on Wire.
-    Serial.print("[INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)...");
-    if (lwlp.begin() != 0) {
-        Serial.println(" FAILED!");
-        Serial.println("[ERROR] Cannot communicate with differential pressure sensor");
-        Serial.println("[ERROR] Check SEN0343 connections to Wire (SDA/SCL)");
-        while (1) {
-            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-            delay(200);
-        }
+    if (!i2cStarted) {
+        SerialOut.println(" FAILED");
+        haltWithError("I2C bus could not be started - check I2C_SDA_PIN/I2C_SCL_PIN in PlatformConfig.h");
     }
-    Serial.println(" OK");
-    Serial.print("        Oversampling: "); Serial.print(PRESSURE_OVERSAMPLES); 
-    Serial.println("x per reading");
-    Serial.print("        Averaging: "); Serial.print(pressureAverageSamples); 
-    Serial.println(" samples");
-    delay(100);
+    SerialOut.print(" OK (SDA "); SerialOut.print(sdaPin); SerialOut.print(", SCL "); SerialOut.print(sclPin);
+    SerialOut.print(", "); SerialOut.print(clockKHz); SerialOut.println(" kHz)");
+    scanAllI2CBuses(SerialOut);
 
-    // Initialize barometer
-    initializeBarometer();
+    initPressureSensor();
+    initBarometer();
 
-    // Initialize hardware
-    Serial.println("[INIT] Motor & Tachometer...");
-    Serial.print("        PWM Pin: "); Serial.println(PWM_pin);
-    Serial.print("        TACH Pin: "); Serial.println(TACH_pin);
-    
-    pinMode(PWM_pin, OUTPUT);
-    analogWrite(PWM_pin, 0);  // Start at 0
-    
-    pinMode(TACH_pin, INPUT_PULLUP);
-    pinMode(LED_BUILTIN, OUTPUT);
-    attachInterrupt(digitalPinToInterrupt(TACH_pin), OnTachPulse, FALLING);
-    
-    Serial.println("        OK");
-    delay(100);
+    SerialOut.println("[INIT] Fan PWM...");
+    SerialOut.print("        Pin: "); SerialOut.println(FAN_PWM_PIN);
+    SerialOut.print("        Frequency: ");
+    if (FAN_PWM_FREQUENCY_HZ > 0) {
+        SerialOut.print(FAN_PWM_FREQUENCY_HZ); SerialOut.println(" Hz");
+    } else {
+        SerialOut.println("core default");
+    }
+    setFanPwm(0);
 
-    // Calibrate pressure sensor with 30 second wait (startup only)
-    calibratePressureSensor(false);
+    calibratePressureSensor(DEFAULT_CALIB_SAMPLES);   // same routine as 'recal'
 
-    // Configure QuickPID for full PID control
-    Serial.print("[INIT] QuickPID Controller (Full PID)...");
-    myPID.SetTunings(Kp, Ki, Kd);
+    // PID. loop() calls Compute() exactly once per update interval, so
+    // QuickPID runs in timer mode: it computes on every call and uses the
+    // configured sample time for the I and D scaling.
+    // P and D on measurement: a setpoint step does not kick the output.
+    // Anti-windup by clamping: QuickPID keeps its running sum (the integral
+    // and the P-on-measurement part) inside the output limits. Not
+    // iAwCondition: in QuickPID 3.1.9 that mode compares a one-sample step
+    // with the absolute output limits, fires on most updates in which the
+    // airspeed rises, and then adds the P-on-measurement step twice (and the
+    // I step times 1 + Ki x interval), so the loop is much more aggressive
+    // upwards than downwards.
+    // The output limits stay at the full PWM range for good; the PWM rate
+    // limit and its anti-windup act around Compute() (see runPidControl()).
     myPID.SetOutputLimits(0, 255);
-    myPID.SetSampleTimeUs(updateInterval * 1000);
-    myPID.SetMode(QuickPID::Control::automatic);
-    
-    // OPTIMIZED SETTINGS FOR LAGGY SYSTEMS - Full PID
-    myPID.SetProportionalMode(QuickPID::pMode::pOnMeas);      // P on Measurement
-    myPID.SetDerivativeMode(QuickPID::dMode::dOnMeas);        // D on Measurement
-    myPID.SetAntiWindupMode(QuickPID::iAwMode::iAwCondition); // Conditional integration
-    
-    Serial.println(" OK");
-    Serial.print("        Update Rate: "); Serial.print(updateInterval); Serial.println(" ms");
-    Serial.print("        Kp="); Serial.print(Kp, 1);
-    Serial.print(", Ki="); Serial.print(Ki, 1);
-    Serial.print(", Kd="); Serial.println(Kd, 1);
-    Serial.println("        P-on-Measurement: ENABLED");
-    Serial.println("        D-on-Measurement: ENABLED");
-    Serial.println("        Conditional Anti-Windup: ENABLED");
-    Serial.print("        PWM Rate Limit: ±"); 
-    Serial.print(MAX_PWM_CHANGE_PER_CYCLE); 
-    Serial.println(" per cycle");
-    delay(100);
+    myPID.SetSampleTimeUs(UPDATE_INTERVAL_MS * 1000);
+    myPID.SetTunings(kp, ki, kd, QuickPID::pMode::pOnMeas, QuickPID::dMode::dOnMeas,
+                     QuickPID::iAwMode::iAwClamp);
+    pidBumplessStart();
+    SerialOut.println("[INIT] QuickPID controller... OK");
+    SerialOut.print("        Update interval: "); SerialOut.print(UPDATE_INTERVAL_MS); SerialOut.println(" ms");
+    SerialOut.print("        Kp="); SerialOut.print(kp, 1);
+    SerialOut.print(", Ki="); SerialOut.print(ki, 1);
+    SerialOut.print(", Kd="); SerialOut.println(kd, 1);
+    SerialOut.println("        P and D on measurement, anti-windup by clamping");
+    SerialOut.print("        PWM rate limit: +/-"); SerialOut.print(MAX_PWM_CHANGE_PER_CYCLE);
+    SerialOut.println(" per update");
 
-    // Initialize sTune wrapper (optional advanced autotuning)
-    Serial.print("[INIT] sTune wrapper...");
-    sTuner = new STunePIDTuner(&currentAirSpeed, &currPWM, STUNE_METHOD);
+    sTuner = new STunePIDTuner(&currentAirspeed, &pidOutput, STUNE_METHOD);
     sTuner->setEmergencyStop(MAX_AIRSPEED);
-    Serial.println(" OK");
-    Serial.print("        Tuning Method: ");
-    Serial.println(sTuner->getTuningMethodName());
-    Serial.println("        Advanced autotuning available via 'stune' command");
-    delay(100);
+    SerialOut.print("[INIT] sTune... OK (method: ");
+    SerialOut.print(sTuner->getTuningMethodName()); SerialOut.println(")");
 
-    startTime = millis();
-    
-    Serial.println("=====================================");
-    Serial.println("[READY] System initialized!");
-    Serial.println("");
-    Serial.println("HARDWARE:");
-    Serial.print("  PWM Output: Pin "); Serial.println(PWM_pin);
-    Serial.print("  Tachometer: Pin "); Serial.println(TACH_pin);
-    Serial.println("");
-    Serial.println("CONTROL:");
-    Serial.println("  Type airspeed value (m/s) to set target");
-    Serial.println("  Example: '10' sets target to 10 m/s");
-    Serial.println("");
-    Serial.println("COMMANDS:");
-    Serial.println("  tune                    - Auto PWM range");
-    Serial.println("  tune <low> <high>       - Manual PWM range");
-    Serial.println("    Example: 'tune 40 100'");
-    Serial.println("  tune <Kp> <Ki> <Kd>     - Manual PID gains");
-    Serial.println("    Example: 'tune 20 8 12'");
-    Serial.println("  recal [N]               - Recalibrate sensor");
-    Serial.println("  avg N                   - Set averaging samples");
-    Serial.println("  stune                   - sTune autotuning (advanced)");
-    Serial.println("");
-    Serial.println("AUTO-TUNE:");
-    Serial.println("  Method: Relay + Aggressive Tuning Rules");
-    Serial.println("  Tuning: 'Some Overshoot' for fast response");
-    Serial.println("  1. Set target airspeed (min 2 m/s)");
-    Serial.println("  2. Type 'tune' or 'tune <low> <high>'");
-    Serial.println("  3. System oscillates 3-4 cycles");
-    Serial.println("  4. Aggressive PID gains calculated");
-    Serial.println("  Duration: ~30-60 seconds");
-    Serial.println("  Tip: Start conservative (e.g., tune 40 100)");
-    Serial.println("");
-    Serial.println("STUNE AUTO-TUNE (ADVANCED):");
-    Serial.println("  Method: Inflection Point (Set Mode at Compile)");
-    Serial.println("  Tuning: Stable response, minimal overshoot");
-    Serial.println("  1. Set target airspeed (min 2 m/s)");
-    Serial.println("  2. Type 'stune'");
-    Serial.println("  3. System applies step and monitors response");
-    Serial.println("  4. Conservative PID gains calculated");
-    Serial.println("  Duration: ~30-60 seconds");
-    Serial.println("  Benefits: More stable than relay tuning");
-    Serial.println("");
-    Serial.println("MANUAL TUNING:");
-    Serial.println("  tune <Kp> <Ki> <Kd> - Directly set gains");
-    Serial.println("  Example: tune 20 8 12");
-    Serial.println("  Ranges: Kp(1-100), Ki(0.1-50), Kd(0.1-50)");
-    Serial.println("");
-    Serial.println("DATA FORMAT:");
-    Serial.println("  T(s) | V | Target | PWM | P(Pa) | Temp(°C) | Err");
-    Serial.println("=====================================\n");
-    
+    SerialOut.println("=====================================");
+    SerialOut.println("[READY] System initialized");
+    printHelp();
+    SerialOut.println("=====================================\n");
+
+    runStartTime = millis();
     lastUpdate = millis();
 }
 
 void loop() {
+    // sTune keeps its own sample timing and needs two Run() calls per
+    // processed sample, so it is serviced on every pass, not only every 200 ms.
+    if (controlMode == MODE_STUNE) runSTune();
+
     unsigned long now = millis();
-    
-    if (now - lastUpdate >= updateInterval) {
-        lastUpdate = now;
-        debugCounter++;
-        
-        // Read sensors with advanced processing
-        float currPressure = readPressureSensorAveraged();   // Oversampled + Averaged
-        float currAirDensity = readBarometerSensor();        // Temperature compensated
-        currentAirSpeed = calcCurrentAirSpeed(currPressure, currAirDensity);
+    if (now - lastUpdate < UPDATE_INTERVAL_MS) return;
+    lastUpdate = now;
 
-        if (sTuneActive) {
-            // sTune autotuning mode
-            runSTune();
-        } else if (!autoTuning) {
-            checkForUserAirspeedUpdate();
-            
-            // Normal PID control
-            myPID.Compute();
-            
-            // Apply PWM with rate limiting
-            int pwmOut = constrain((int)round(currPWM), 0, 255);
-            float pwmChange = pwmOut - lastPWMOutput;
-            if (abs(pwmChange) > MAX_PWM_CHANGE_PER_CYCLE) {
-                pwmChange = (pwmChange > 0) ? MAX_PWM_CHANGE_PER_CYCLE : -MAX_PWM_CHANGE_PER_CYCLE;
-                pwmOut = lastPWMOutput + pwmChange;
-            }
-            lastPWMOutput = pwmOut;
-            analogWrite(PWM_pin, pwmOut);
-            
-        } else {
-            // Relay auto-tuning mode - DIRECT CONTROL
-            runRelayTune();
-        }
+    // 1. Sensors: fresh airspeed for both the commands and the controller
+    float pressure = readPressureAveraged();
+    currentAirspeed = calcAirspeed(pressure, readAirDensity());
 
-        unsigned long elapsed = (now - startTime) / 1000;
-        float error = desiredAirSpeed - currentAirSpeed;
+    // 2. User commands, accepted in every mode (stop must always work)
+    ControlMode modeBeforeCommands = controlMode;
+    unsigned long commandStart = millis();
+    pollSerialCommands();
+    unsigned long commandTime = millis() - commandStart;   // e.g. recal blocks on purpose
 
-        // Print data
-        if (sTuneActive) {
-            Serial.print("[sTune] ");
-            Serial.print(sTuner->getStatusString()); Serial.print(" | ");
-        } else if (autoTuning) {
-            Serial.print("[TUNE] ");
-            uint32_t tuneElapsed = (millis() - tuneStartTime) / 1000;
-            Serial.print(tuneElapsed); Serial.print("s | ");
-            Serial.print("Cycle:"); Serial.print(cycleCount); Serial.print(" | ");
-        } else {
-            Serial.print(elapsed); Serial.print("s | ");
+    // 3. Safety: without valid pressure data the fan must not run. Checked
+    //    after the commands, so a new target is cancelled before it acts.
+    checkPressureSensor();
+
+    // 4. Control. If a command (or the check above) just started or ended a
+    //    tune, the new mode has already set the fan; let it begin cleanly on
+    //    the next pass instead of running the old controller once more.
+    if (controlMode == modeBeforeCommands) {
+        switch (controlMode) {
+            case MODE_PID:
+                runPidControl();
+                checkAirflow(fanPwm >= NO_AIRFLOW_PWM, "full fan power");
+                break;
+            case MODE_RELAY_TUNE: runRelayTune();  break;
+            case MODE_STUNE:      break;           // serviced at the top of loop()
         }
-        Serial.print("V:"); Serial.print(currentAirSpeed, 2); Serial.print(" | ");
-        Serial.print("T:"); Serial.print(desiredAirSpeed, 2); Serial.print(" | ");
-        Serial.print("PWM:"); Serial.print((int)round(currPWM)); Serial.print(" | ");
-        Serial.print("P:"); Serial.print(currPressure, 2); Serial.print(" | ");
-        Serial.print("T:"); Serial.print(lastTemperature, 1); Serial.print("°C | ");
-        Serial.print("Err:"); Serial.print(error, 2);
-        
-        // Show PID values and averaging every 20 readings
-        if (debugCounter % 20 == 0 && !autoTuning && !sTuneActive) {
-            Serial.print(" | Kp:"); Serial.print(Kp, 1);
-            Serial.print(" Ki:"); Serial.print(Ki, 1);
-            Serial.print(" Kd:"); Serial.print(Kd, 1);
-            Serial.print(" Avg:"); Serial.print(pressureAverageSamples);
-        }
-        
-        Serial.println();
     }
+
+    printDataLine(now, pressure);
+    warnIfSlowPass(millis() - now - commandTime);
 }
 
-void startRelayTune(int pwmLow, int pwmHigh) {
-    if (desiredAirSpeed < MIN_TUNE_SETPOINT) {
-        Serial.println("\n[TUNE] ERROR: Target too low for auto-tune");
-        Serial.print("[TUNE] Minimum target: ");
-        Serial.print(MIN_TUNE_SETPOINT, 2);
-        Serial.println(" m/s");
-        Serial.println("[TUNE] Set a higher target speed first (e.g., 10)");
-        Serial.println("[TUNE] Then type 'tune' to start\n");
-        return;
+// ===========================================================================
+// Sensors
+// ===========================================================================
+
+// The LWLP5000's fixed address 0x00 is outside the scanner's range, so it is
+// probed on each bus (header and, on the Uno R4 WiFi, Qwiic). The driver
+// takes its bus in the constructor, so it is created once the bus is known.
+void initPressureSensor() {
+    SerialOut.print("[INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)...");
+    const char *busName = nullptr;
+    TwoWire *bus = probeDeviceBus(LWLP_ADDRESS, &busName);
+    if (bus == nullptr) {
+        SerialOut.println(" NOT FOUND");
+        SerialOut.println("[ERROR] No device at 0x00 on any I2C bus; check the SEN0343 wiring");
+        haltWithError("Differential pressure sensor not responding");
     }
-    
-    // SAVE CURRENT AVERAGING BEFORE CHANGING IT
-    savedAverageSamples = pressureAverageSamples;
-    
-    // REDUCE AVERAGING FOR FASTER TUNING RESPONSE
-    // setPressureAverageSamples(3);  // Keep some averaging for noise reduction
-    
-    Serial.println("\n=====================================");
-    Serial.println("[RELAY TUNE] AUTO-TUNE STARTING");
-    Serial.println("=====================================");
-    Serial.print("[RELAY] Target airspeed: ");
-    Serial.print(desiredAirSpeed, 2);
-    Serial.println(" m/s");
-    Serial.println("[RELAY] Method: Åström-Hägglund Relay");
-    Serial.println("[RELAY] Tuning Rules: AGGRESSIVE (Some Overshoot)");
-    // Serial.print("[RELAY] Averaging temporarily set to 3 (was ");
-    // Serial.print(savedAverageSamples);
-    Serial.println(")");
-    
-    // Calculate relay outputs
-    if (pwmLow > 0 && pwmHigh > 0) {
-        // Manual PWM range provided
-        relayOutputLow = constrain(pwmLow, 0, 255);
-        relayOutputHigh = constrain(pwmHigh, 0, 255);
-        
-        if (relayOutputLow >= relayOutputHigh) {
-            Serial.println("[ERROR] PWM Low must be less than PWM High!");
-            Serial.println("        Example: tune 40 100");
-            setPressureAverageSamples(savedAverageSamples);
-            return;
-        }
-        
-        Serial.println("[RELAY] PWM Range: MANUAL");
-    } else {
-        float estimatedPWM = desiredAirSpeed * 8; // Ball park sensitivity
-        relayOutputHigh = constrain(round(estimatedPWM) + 20, 40, 245);
-        relayOutputLow = constrain(round(estimatedPWM) - 20, 20, 150);
-        
-        Serial.println("[RELAY] PWM Range: AUTO-ESTIMATED");
-        Serial.println("        Tip: If tuning fails, try manual range");
-        Serial.println("        Example: tune 40 100");
+
+    // Static, not new: the constructor sets only the bus, and begin() reads
+    // the drift member before it writes it (it subtracts the drift from the
+    // readings it averages). Static storage is zero-filled before the
+    // constructor runs, so that first drift is 0; heap memory is not.
+    static DFRobot_LWLP sensor(bus);
+    lwlp = &sensor;
+    if (lwlp->begin() != 0) {
+        SerialOut.println(" FAILED");
+        SerialOut.print("[ERROR] Device found on "); SerialOut.print(busName);
+        SerialOut.println(" but it does not respond like an LWLP5000");
+        haltWithError("Differential pressure sensor not responding");
     }
-    
-    Serial.println("[RELAY] Configuration:");
-    Serial.print("        PWM High: "); Serial.println((int)relayOutputHigh);
-    Serial.print("        PWM Low: "); Serial.println((int)relayOutputLow);
-    Serial.print("        PWM Delta: "); Serial.println((int)(relayOutputHigh - relayOutputLow));
-    Serial.print("        Hysteresis: ±"); Serial.print(relayHysteresis); Serial.println(" m/s");
-    Serial.print("        Required cycles: "); Serial.println(REQUIRED_CYCLES);
-    Serial.println("[RELAY] Process:");
-    Serial.println("        1. Oscillate PWM between high/low");
-    Serial.println("        2. Measure oscillation period & amplitude");
-    Serial.println("        3. Calculate AGGRESSIVE PID gains");
-    Serial.println("        Expected: Faster response, some overshoot");
-    Serial.println("        Duration: ~30-60 seconds");
-    Serial.println("=====================================");
-    
-    // Initialize relay tuning state
-    tuneSetpoint = desiredAirSpeed;
-    tuneStartTime = millis();
-    relayState = RELAY_HIGH;
-    
-    peakHigh = -999;
-    peakLow = 999;
-    cycleCount = 0;
-    firstCrossing = true;
-    sumPeriods = 0;
-    sumAmplitudes = 0;
-    validCycles = 0;
-    
-    // Set PWM to LOW and start
-    relayState = RELAY_LOW;
-    currPWM = relayOutputLow;
-    analogWrite(PWM_pin, (int)relayOutputLow);
-    delay(500);
-    // Verify it was written
-    Serial.print("[RELAY] currPWM variable = ");
-    Serial.println(currPWM, 1);
-    Serial.println("[RELAY] Tuning active");
-    
-    autoTuning = true;
+    SerialOut.print(" OK (on "); SerialOut.print(busName); SerialOut.println(")");
+    SerialOut.print("        Averaging: "); SerialOut.print(pressureAverageSamples);
+    SerialOut.println(" samples");
 }
 
-void runRelayTune() {
-    // Update peak tracking
-    if (currentAirSpeed > peakHigh) peakHigh = currentAirSpeed;
-    if (currentAirSpeed < peakLow) peakLow = currentAirSpeed;
-    
-    // DIRECTLY WRITE PWM every cycle to ensure it's applied
-    int pwmToWrite = (int)round(currPWM);
-    analogWrite(PWM_pin, pwmToWrite);
-    
-    // Relay logic with hysteresis
-    if (relayState == RELAY_HIGH) {
-        // Switch to LOW if airspeed goes above target + hysteresis
-        if (currentAirSpeed > tuneSetpoint + relayHysteresis) {
-            relayState = RELAY_LOW;
-            currPWM = relayOutputLow;
-            analogWrite(PWM_pin, (int)relayOutputLow);
-            
-            Serial.print("[RELAY] Switched to LOW (PWM ");
-            Serial.print((int)relayOutputLow);
-            Serial.print(") at V=");
-            Serial.print(currentAirSpeed, 2);
-            Serial.println(" m/s");
-            
-            // Record crossing
-            if (!firstCrossing) {
-                unsigned long now = millis();
-                oscillationPeriod = now - lastCrossingTime;
-                lastCrossingTime = now;
-                
-                float amplitude = (peakHigh - peakLow) / 2.0;
-                
-                // Valid measurement if amplitude is reasonable
-                if (amplitude > 0.5 && oscillationPeriod > 2000) {
-                    sumPeriods += oscillationPeriod;
-                    sumAmplitudes += amplitude;
-                    validCycles++;
-                    cycleCount++;
-                    
-                    Serial.print("[RELAY] Cycle "); Serial.print(cycleCount);
-                    Serial.print(" | Period: "); Serial.print(oscillationPeriod / 1000.0, 1); Serial.print("s");
-                    Serial.print(" | Amplitude: "); Serial.print(amplitude, 2); Serial.print(" m/s");
-                    Serial.print(" | Peak High: "); Serial.print(peakHigh, 2);
-                    Serial.print(" | Peak Low: "); Serial.println(peakLow, 2);
-                    
-                    // Reset peaks for next cycle
-                    peakHigh = currentAirSpeed;
-                    peakLow = currentAirSpeed;
-                }
-            } else {
-                firstCrossing = false;
-                lastCrossingTime = millis();
-            }
-        }
-    } else {
-        // Switch to HIGH if airspeed goes below target - hysteresis
-        if (currentAirSpeed < tuneSetpoint - relayHysteresis) {
-            relayState = RELAY_HIGH;
-            currPWM = relayOutputHigh;
-            analogWrite(PWM_pin, (int)relayOutputHigh);
-            
-            Serial.print("[RELAY] Switched to HIGH (PWM ");
-            Serial.print((int)relayOutputHigh);
-            Serial.print(") at V=");
-            Serial.print(currentAirSpeed, 2);
-            Serial.println(" m/s");
-        }
+// Find the BMP585 in the scan results (default address first, then the
+// alternative) and start it. The driver takes the address in its constructor,
+// so it is created once, after the address is known.
+void initBarometer() {
+    SerialOut.print("[INIT] BMP585 barometer (DFRobot SEN0665)...");
+    const char *busName = nullptr;
+    uint8_t address = BMP585_ADDRESS;
+    TwoWire *bus = getDeviceBus(address, &busName);
+    if (bus == nullptr) {
+        address = BMP585_ALT_ADDRESS;
+        bus = getDeviceBus(address, &busName);
     }
-    
-    // Check if we have enough cycles
-    if (validCycles >= REQUIRED_CYCLES) {
-        // Calculate average period and amplitude
-        float avgPeriod = sumPeriods / validCycles / 1000.0;  // seconds
-        float avgAmplitude = sumAmplitudes / validCycles;      // m/s
-        
-        // Calculate ultimate gain (Ku) and period (Tu)
-        float outputStep = relayOutputHigh - relayOutputLow;
-        float Ku = (4.0 * outputStep) / (PI * avgAmplitude * 255.0);  // Normalize by 255 for 0-1 range
-        float Tu = avgPeriod;
-        
-        // AGGRESSIVE TUNING RULES - "Some Overshoot" method
-        // Based on Tyreus-Luyben modified for faster response
-        // More aggressive than conservative ZN rules
-        // Kp = 0.45 * Ku / 0.9;  // ~0.50 * Ku (more aggressive than 0.6)
-        // Ki = 0.54 * Ku / (2.2 * Tu);  // Faster integral action
-        // Kd = 0.15 * Ku * Tu;  // Stronger derivative (2x standard)
-        
-        // Alternative calculation for comparison
-        Kp = 0.7 * Ku;  // Even more aggressive
-        Ki = 1.75 * Ku / Tu;
-        Kd = 0.15 * Ku * Tu;
-        
-        Serial.println("\n[RELAY] Tuning calculations:");
-        Serial.print("  Standard (Some Overshoot): Kp="); Serial.print(Kp, 2);
-        Serial.print(", Ki="); Serial.print(Ki, 2);
-        Serial.print(", Kd="); Serial.println(Kd, 2);
-        // Serial.print("  Extra Aggressive option: Kp="); Serial.print(Kp_aggressive, 2);
-        // Serial.print(", Ki="); Serial.print(Ki_aggressive, 2);
-        // Serial.print(", Kd="); Serial.println(Kd_aggressive, 2);
-        // Serial.println("  Using: Some Overshoot (balanced aggressive)");
-        
-        // Tuning Bounds
-        Kp = constrain(Kp, 10.0, 100.0);
-        Ki = constrain(Ki, 1.0, 10.0);
-        Kd = constrain(Kd, 1.0, 10.0);
-        
-        myPID.SetTunings(Kp, Ki, Kd);
-        
-        // RESTORE PREVIOUS AVERAGING SETTING
-        setPressureAverageSamples(savedAverageSamples);
-        
-        // Stop motor
-        currPWM = 0;
-        analogWrite(PWM_pin, 0);
-        
-        Serial.println("\n=====================================");
-        Serial.println("[RELAY] AUTO-TUNE COMPLETE!");
-        Serial.println("=====================================");
-        Serial.println("        Measured Parameters:");
-        Serial.print("          Period (Tu): "); Serial.print(Tu, 2); Serial.println(" s");
-        Serial.print("          Amplitude: "); Serial.print(avgAmplitude, 2); Serial.println(" m/s");
-        Serial.print("          Ultimate Gain (Ku): "); Serial.println(Ku, 4);
-        Serial.print("          PWM Range: "); Serial.print((int)relayOutputLow);
-        Serial.print(" - "); Serial.println((int)relayOutputHigh);
-        Serial.println("        Calculated PID Gains (AGGRESSIVE):");
-        Serial.print("          Kp = "); Serial.println(Kp, 4);
-        Serial.print("          Ki = "); Serial.println(Ki, 4);
-        Serial.print("          Kd = "); Serial.println(Kd, 4);
-        Serial.println("        Tuning Method: Some Overshoot");
-        Serial.println("        Expected: Fast response, minor overshoot");
-        Serial.print("        Averaging restored to ");
-        Serial.print(savedAverageSamples);
-        Serial.println(" samples");
-        Serial.println("        PID updated and ready");
-        Serial.println("        ");
-        Serial.println("        If too aggressive, reduce Kp by 20-30%");
-        Serial.println("        If too slow, increase all gains by 20%");
-        Serial.print("        Or manually set: tune ");
-        Serial.print(Kp, 1); Serial.print(" ");
-        Serial.print(Ki, 1); Serial.print(" ");
-        Serial.println(Kd, 1);
-        Serial.println("=====================================\n");
-        
-        autoTuning = false;
-        desiredAirSpeed = tuneSetpoint;
-        lastPWMOutput = 0;
-        myPID.Reset();
+    if (bus == nullptr) {
+        SerialOut.println(" NOT FOUND");
+        SerialOut.println("[ERROR] No device at 0x47 or 0x46 on any I2C bus; check the SEN0665 wiring");
+        haltWithError("Barometer not found");
     }
-    
-    // Timeout after 120 seconds
-    if ((millis() - tuneStartTime) > 120000) {
-        Serial.println("\n[RELAY] AUTO-TUNE TIMEOUT!");
-        Serial.println("        Not enough oscillations detected");
-        Serial.print("        Valid cycles: "); Serial.print(validCycles);
-        Serial.print(" / "); Serial.println(REQUIRED_CYCLES);
-        Serial.println("        Troubleshooting:");
-        Serial.println("        - Check motor/ESC connection and power");
-        Serial.println("        - Verify PWM pin wiring");
-        Serial.println("        - Try different PWM range");
-        Serial.println("        - Ensure target airspeed is achievable");
-        Serial.print("        - Current range: "); Serial.print((int)relayOutputLow);
-        Serial.print(" - "); Serial.println((int)relayOutputHigh);
-        Serial.print("        - Peak airspeed seen: "); Serial.print(peakHigh, 2);
-        Serial.println(" m/s");
-        
-        setPressureAverageSamples(savedAverageSamples);
-        autoTuning = false;
-        currPWM = 0;
-        analogWrite(PWM_pin, 0);
+
+    barometer = new DFRobot_BMP58X_I2C(bus, address);
+    if (!barometer->begin()) {
+        SerialOut.println(" FAILED");
+        SerialOut.print("[ERROR] Device found on "); SerialOut.print(busName);
+        SerialOut.println(" but it does not respond like a BMP585");
+        haltWithError("Barometer not responding");
     }
+    barometer->setMeasureMode(barometer->eNormal);
+    SerialOut.print(" OK (0x"); SerialOut.print(address, HEX);
+    SerialOut.print(" on "); SerialOut.print(busName); SerialOut.println(")");
+
+    // First reading as a plausibility check for the user
+    readAirDensity();
+    SerialOut.print("        Temp: "); SerialOut.print(airTemperatureC, 1);
+    SerialOut.print(" C, air density: "); SerialOut.print(airDensity, 3); SerialOut.println(" kg/m3");
 }
 
-void setPressureAverageSamples(int samples) {
-    samples = constrain(samples, MIN_AVG_SAMPLES, MAX_AVG_SAMPLES);
-    
-    if (samples != pressureAverageSamples) {
-        pressureAverageSamples = samples;
-        
-        // Reset averaging buffer
-        pressureBufferIndex = 0;
-        pressureBufferFilled = false;
-        for (int i = 0; i < MAX_AVG_SAMPLES; i++) {
-            pressureBuffer[i] = 0.0;
-        }
-        
-        Serial.print("[CONFIG] Pressure averaging set to ");
-        Serial.print(pressureAverageSamples);
-        Serial.println(" samples");
-        
-        if (pressureAverageSamples == 1) {
-            Serial.println("         (No averaging - raw oversampled readings)");
-        } else {
-            Serial.print("         Effective lag: ~");
-            Serial.print(pressureAverageSamples * updateInterval);
-            Serial.println(" ms");
-        }
-    }
+// One raw sensor reading in Pa; returns false if it is invalid (see
+// LWLP_INVALID_CODE). The LWLP library already subtracts the reading it took
+// at power-on; calibration removes what is left of the zero error. Blocks
+// for about 60 ms (the library waits for the conversion).
+bool readPressureRaw(float &pressurePa) {
+    DFRobot_LWLP::sLwlp_t reading = lwlp->getData();
+    pressurePa = reading.presure;        // "presure" is the library's spelling
+    return reading.presureData != LWLP_INVALID_CODE;
 }
 
-void calibratePressureSensor(bool skipWait, int numSamples) {
-    // Use provided numSamples, or default if not specified
-    int samples = (numSamples > 0) ? numSamples : calibrationSamples;
-    samples = constrain(samples, MIN_CALIB_SAMPLES, MAX_CALIB_SAMPLES);
-    
-    Serial.println("\n[CALIB] Pressure Sensor Calibration");
-    Serial.println("=====================================");
-    Serial.println("        **CRITICAL - READ CAREFULLY**");
-    Serial.println("        1. Ensure NO airflow in tunnel");
-    Serial.println("        2. Both pitot ports open to atmosphere");
-    Serial.println("        3. Fan must be completely OFF");
-    
-    if (!skipWait) {
-        Serial.println("        4. Let system settle for thermal stability");
-        Serial.println("");
-        Serial.println("        Waiting 15 seconds...");
-        Serial.println("=====================================");
-        
-        for (int i = 15; i > 0; i--) {
-            Serial.print("        ");
-            if (i < 10) Serial.print(" ");
-            Serial.print(i);
-            Serial.println(" seconds remaining...");
-            delay(1000);
-        }
-    } else {
-        Serial.println("        4. Waiting 3 seconds...");
-        Serial.println("=====================================");
-        delay(3000);
-    }
-    
-    Serial.println("\n        Starting calibration measurements...");
-    Serial.print("        Using "); Serial.print(samples); 
-    Serial.println(" uncalibrated oversampled readings");
-    
-    float sum = 0;
-    int validSamples = 0;
-    float minVal = 999999;
-    float maxVal = -999999;
-    
-    Serial.print("        Taking "); Serial.print(samples); Serial.print(" samples: ");
-    
-    // Take calibration samples WITHOUT applying offset (use raw uncalibrated function)
-    for (int i = 0; i < samples; i++) {
-        float sum_oversample = 0.0;
-        int validReads = 0;
-        
-        // Oversample the raw sensor
-        for (int j = 0; j < PRESSURE_OVERSAMPLES; j++) {
-            float reading = readPressureSensorRawUncalibrated();
-            if (reading >= 0.0) {
-                sum_oversample += reading;
-                validReads++;
-            }
-            delayMicroseconds(500);
-        }
-        
-        if (validReads > 0) {
-            float avgReading = sum_oversample / validReads;
-            sum += avgReading;
-            validSamples++;
-            minVal = min(minVal, avgReading);
-            maxVal = max(maxVal, avgReading);
-            Serial.print(".");
-        } else {
-            Serial.print("X");
-        }
-        delay(100);
-    }
-    Serial.println();
-    
-    if (validSamples > samples / 2) {
-        pressureOffset = sum / validSamples;
-        calibrated = true;
-        
-        Serial.println("\n        Calibration Results:");
-        Serial.print("        Valid samples: "); Serial.print(validSamples); 
-        Serial.print(" / "); Serial.println(samples);
-        Serial.print("        Min reading: "); Serial.print(minVal, 4); Serial.println(" Pa");
-        Serial.print("        Max reading: "); Serial.print(maxVal, 4); Serial.println(" Pa");
-        Serial.print("        Range: "); Serial.print(maxVal - minVal, 4); Serial.println(" Pa");
-        Serial.print("        Average (offset): "); Serial.print(pressureOffset, 4); Serial.println(" Pa");
-        Serial.print("        Std Dev est: "); 
-        Serial.print((maxVal - minVal) / sqrt(validSamples), 4); Serial.println(" Pa");
-        Serial.println("        Status: SUCCESS ✓");
-        Serial.println("=====================================\n");
-        
-        // Reset averaging buffer after calibration
-        pressureBufferIndex = 0;
-        pressureBufferFilled = false;
-        for (int i = 0; i < MAX_AVG_SAMPLES; i++) {
-            pressureBuffer[i] = 0.0;
-        }
-        
-    } else {
-        Serial.println("\n        [ERROR] Calibration FAILED!");
-        Serial.print("        Valid samples: "); Serial.print(validSamples); 
-        Serial.print(" / "); Serial.println(samples);
-        Serial.println("        Using zero offset (uncalibrated mode)");
-        Serial.println("        WARNING: Readings may be inaccurate!");
-        Serial.println("=====================================\n");
-        pressureOffset = 0.0;
-        calibrated = false;
-    }
-    delay(500);
-}
-
-float readBarometerSensor() { 
-    float temp_c = bmp58x->readTempC();
-    float temp_k = temp_c + 273.15;
-    float pressure_pa = bmp58x->readPressPa();
-    
-    // Sanity-check: fall back to cached values on implausible readings
-    if (temp_k < 173.15 || temp_k > 373.15 || pressure_pa < 50000.0 || pressure_pa > 120000.0) {
-        return lastAirDensity;
-    }
-    
-    float density = pressure_pa / (Specific_gas_constant * temp_k);
-    
-    lastAirDensity = density;
-    lastTemperature = temp_c;
-    
-    return density;
-}
-
-float readPressureSensorRawUncalibrated() {
-    DFRobot_LWLP::sLwlp_t data = lwlp.getData();
-    // "presure" is the correct field name (library spelling)
-    float pressure = data.presure;
-    if (pressure < 0.0) pressure = 0.0;
-    return pressure;
-}
-
-float readPressureSensorRaw() { 
-    DFRobot_LWLP::sLwlp_t data = lwlp.getData();
-    float pressure = data.presure;
-    
-    if (calibrated) {
-        pressure -= pressureOffset;
-    }
-    
-    if (pressure < 0.0) pressure = 0.0;
-    return pressure;
-}
-
-float readPressureSensorOversampled() {
+// Oversampled reading minus the calibration offset; false if no reading was
+// valid. Kept signed on purpose: at zero airspeed the noise swings both
+// ways, and clamping negative values here would bias the moving average
+// (and the airspeed) upward.
+bool readPressureCorrected(float &pressurePa) {
     float sum = 0.0;
-    int validReads = 0;
-    
+    int valid = 0;
     for (int i = 0; i < PRESSURE_OVERSAMPLES; i++) {
-        float reading = readPressureSensorRaw();
-        if (reading >= 0.0) {
+        float reading;
+        if (readPressureRaw(reading)) {
             sum += reading;
-            validReads++;
+            valid++;
         }
-        delayMicroseconds(500);
     }
-    
-    if (validReads > 0) {
-        return sum / validReads;
-    }
-    
-    return 0.0;
+    if (valid == 0) return false;
+    pressurePa = sum / valid - pressureOffset;
+    return true;
 }
 
-float readPressureSensorAveraged() {
-    float singleReading = readPressureSensorOversampled();
-    
-    pressureBuffer[pressureBufferIndex] = singleReading;
-    pressureBufferIndex++;
-    
-    if (pressureBufferIndex >= pressureAverageSamples) {
-        pressureBufferIndex = 0;
-        pressureBufferFilled = true;
+// Moving average over the last pressureAverageSamples valid readings. An
+// invalid reading is left out and counted; checkPressureSensor() acts on a
+// run of them.
+float readPressureAveraged() {
+    float reading;
+    if (readPressureCorrected(reading)) {
+        invalidPressureReads = 0;
+        pressureBuffer[pressureBufferIndex] = reading;
+        pressureBufferIndex++;
+        if (pressureBufferIndex >= pressureAverageSamples) {
+            pressureBufferIndex = 0;
+            pressureBufferFilled = true;
+        }
+    } else {
+        invalidPressureReads++;
     }
-    
-    float sum = 0;
-    int samplesToAverage = pressureBufferFilled ? pressureAverageSamples : pressureBufferIndex;
-    
-    for (int i = 0; i < samplesToAverage; i++) {
+
+    int count = pressureBufferFilled ? pressureAverageSamples : pressureBufferIndex;
+    if (count == 0) return 0.0;          // no valid reading since the last reset
+    float sum = 0.0;
+    for (int i = 0; i < count; i++) {
         sum += pressureBuffer[i];
     }
-    
-    return (samplesToAverage > 0) ? (sum / samplesToAverage) : 0.0;
+    return sum / count;
 }
 
-float calcCurrentAirSpeed(float pressure, float AirDensity) { 
-    if (pressure < 0.0) pressure = 0.0;
-    if (AirDensity < 0.1) AirDensity = 1.225;
-    
-    float airSpeed = sqrt((2.0 * pressure) / AirDensity);
-    
-    return airSpeed;
+// Forget old samples (after a new offset or a new averaging length).
+void resetPressureAverage() {
+    pressureBufferIndex = 0;
+    pressureBufferFilled = false;
 }
 
-void checkForUserAirspeedUpdate() {
-    if (Serial.available() > 0) {
-        String inputVal = Serial.readStringUntil('\n');
-        inputVal.trim();
-        
-        if (inputVal.equalsIgnoreCase("stune")) {
-            startSTune();
-            return;
-        }
-        
-        if (inputVal.equalsIgnoreCase("tune")) {
-            startRelayTune();  // Auto PWM
-            return;
-        }
-        
-        if (inputVal.startsWith("tune ") || inputVal.startsWith("TUNE ")) {
-            // Parse "tune" command with parameters
-            // Could be: tune <low> <high> (PWM range) OR tune <Kp> <Ki> <Kd> (manual PID)
-            
-            int firstSpace = inputVal.indexOf(' ');
-            int secondSpace = inputVal.indexOf(' ', firstSpace + 1);
-            int thirdSpace = inputVal.indexOf(' ', secondSpace + 1);
-            
-            if (thirdSpace > 0) {
-                // THREE parameters: tune <Kp> <Ki> <Kd>
-                String kpStr = inputVal.substring(firstSpace + 1, secondSpace);
-                String kiStr = inputVal.substring(secondSpace + 1, thirdSpace);
-                String kdStr = inputVal.substring(thirdSpace + 1);
-                
-                float newKp = kpStr.toFloat();
-                float newKi = kiStr.toFloat();
-                float newKd = kdStr.toFloat();
-                
-                if (newKp > 0 && newKi >= 0 && newKd >= 0) {
-                    // Apply constraints
-                    newKp = constrain(newKp, 1.0, 100.0);
-                    newKi = constrain(newKi, 0.1, 50.0);
-                    newKd = constrain(newKd, 0.1, 50.0);
-                    
-                    Kp = newKp;
-                    Ki = newKi;
-                    Kd = newKd;
-                    
-                    myPID.SetTunings(Kp, Ki, Kd);
-                    myPID.Reset();
-                    
-                    Serial.println("\n[PID] Manual PID gains set:");
-                    Serial.print("      Kp = "); Serial.println(Kp, 4);
-                    Serial.print("      Ki = "); Serial.println(Ki, 4);
-                    Serial.print("      Kd = "); Serial.println(Kd, 4);
-                    Serial.println("      PID controller reset and ready\n");
-                } else {
-                    Serial.println("[ERROR] Invalid PID values");
-                    Serial.println("        Usage: tune <Kp> <Ki> <Kd>");
-                    Serial.println("        Example: tune 20 8 12");
-                    Serial.println("        Ranges: Kp(1-100), Ki(0.1-50), Kd(0.1-50)");
-                }
-                
-            } else if (secondSpace > 0) {
-                // TWO parameters: tune <low> <high> (PWM range)
-                String lowStr = inputVal.substring(firstSpace + 1, secondSpace);
-                String highStr = inputVal.substring(secondSpace + 1);
-                
-                int pwmLow = lowStr.toInt();
-                int pwmHigh = highStr.toInt();
-                
-                if (pwmLow > 0 && pwmHigh > 0) {
-                    startRelayTune(pwmLow, pwmHigh);
-                } else {
-                    Serial.println("[ERROR] Invalid PWM values");
-                    Serial.println("        Usage: tune <low> <high>");
-                    Serial.println("        Example: tune 40 100");
-                }
-            } else {
-                Serial.println("[ERROR] Missing parameters");
-                Serial.println("        For relay auto-tune: tune <low> <high>");
-                Serial.println("          Example: tune 40 100");
-                Serial.println("        For manual PID: tune <Kp> <Ki> <Kd>");
-                Serial.println("          Example: tune 20 8 12");
-            }
-            return;
-        }
-        
-        if (inputVal.startsWith("recal") || inputVal.startsWith("RECAL")) {
-            Serial.println("\n[CMD] Recalibrating pressure sensor...");
-            Serial.println("        Stop the fan and ensure no airflow!");
-            
-            int spaceIndex = inputVal.indexOf(' ');
-            if (spaceIndex > 0) {
-                int numSamples = inputVal.substring(spaceIndex + 1).toInt();
-                if (numSamples >= MIN_CALIB_SAMPLES && numSamples <= MAX_CALIB_SAMPLES) {
-                    calibratePressureSensor(true, numSamples);
-                } else {
-                    Serial.print("[ERROR] Calibration samples must be between ");
-                    Serial.print(MIN_CALIB_SAMPLES); Serial.print(" and ");
-                    Serial.println(MAX_CALIB_SAMPLES);
-                }
-            } else {
-                calibratePressureSensor(true);
-            }
-            return;
-        }
-        
-        if (inputVal.startsWith("avg ") || inputVal.startsWith("AVG ")) {
-            int newSamples = inputVal.substring(4).toInt();
-            if (newSamples >= MIN_AVG_SAMPLES && newSamples <= MAX_AVG_SAMPLES) {
-                setPressureAverageSamples(newSamples);
-            } else {
-                Serial.print("[ERROR] Averaging samples must be between ");
-                Serial.print(MIN_AVG_SAMPLES); Serial.print(" and ");
-                Serial.println(MAX_AVG_SAMPLES);
-            }
-            return;
-        }
-        
-        float inputAirSpeed = inputVal.toFloat();
-        
-        if (inputAirSpeed < 0) {
-            Serial.println("[ERROR] Negative airspeed not allowed");
-            return;
-        }
-        
-        if (inputAirSpeed > MAX_AIRSPEED) {
-            Serial.print("[WARN] Capping at "); Serial.print(MAX_AIRSPEED); Serial.println(" m/s");
-            inputAirSpeed = MAX_AIRSPEED;
-        }
-        
-        desiredAirSpeed = inputAirSpeed;
-        myPID.Reset();
-        
-        Serial.print("[SERIAL] New target: "); Serial.print(desiredAirSpeed, 2); Serial.println(" m/s");
+// avg <N>: longer averages give a calmer reading but a slower response.
+// The command is always confirmed; only a new length restarts the average
+// (the buffer holds the old number of samples).
+void setPressureAverageSamples(int samples) {
+    if (samples != pressureAverageSamples) {
+        pressureAverageSamples = samples;
+        resetPressureAverage();
+    }
+
+    SerialOut.print("[CONFIG] Pressure averaging set to ");
+    SerialOut.print(pressureAverageSamples);
+    SerialOut.println(" samples");
+    if (pressureAverageSamples > 1) {
+        // A plain N-sample average delays the signal by (N-1)/2 samples
+        SerialOut.print("         Effective lag: ~");
+        SerialOut.print((pressureAverageSamples - 1) * UPDATE_INTERVAL_MS / 2);
+        SerialOut.println(" ms");
     }
 }
 
-unsigned int RPMcalc() { 
-    noInterrupts();
-    unsigned long interval = PulseInterval;
-    interrupts();
+// Zero the differential pressure sensor: the mean of numSamples raw readings
+// taken in still air becomes the offset. The fan is always stopped first,
+// because any airflow during calibration would be stored as "zero" and make
+// every later airspeed reading wrong.
+void calibratePressureSensor(int numSamples) {
+    stopFan();
 
-    if (interval > 0) {
-        unsigned int rpm = (60UL * 1000000UL) / (interval * 2);
-        LastValidRPM = rpm;
-        LastRPMUpdateTime = millis();
-        return rpm;
+    SerialOut.println("\n[CALIB] Pressure Sensor Calibration");
+    SerialOut.println("=====================================");
+    SerialOut.println("        Fan stopped. Keep the tunnel still:");
+    SerialOut.println("        - no airflow, both pitot ports open to the room");
+    SerialOut.print  ("        Waiting "); SerialOut.print(CALIBRATION_SETTLE_S);
+    SerialOut.println(" s for the fan to stop and readings to settle...");
+    for (int i = CALIBRATION_SETTLE_S; i > 0; i--) {
+        SerialOut.print("        ");
+        if (i < 10) SerialOut.print(" ");
+        SerialOut.print(i);
+        SerialOut.println(" seconds remaining...");
+        delay(1000);
     }
 
-    if ((millis() - LastRPMUpdateTime) > RPM_TIMEOUT_MS) {
-        return 0;
-    }
-    
-    return LastValidRPM;
-}
-
-void OnTachPulse() { 
-    unsigned long now = micros();
-    PulseInterval = now - LastPulseTime;
-    LastPulseTime = now;
-}
-
-void initializeBarometer() { 
-    Serial.print("[INIT] BMP585 barometer (DFRobot SEN0665)...");
-    
-    // Try to find BMP585 on any bus — check default address 0x47 then alternate 0x46
-    const char* bmpBusName = nullptr;
-    TwoWire* bmpBus = getDeviceBus(BMP_I2C_ADDRESS, &bmpBusName);
-    
-    if (bmpBus == nullptr) {
-        // Try alternate address
-        bmpBus = getDeviceBus(0x46, &bmpBusName);
-    }
-    
-    if (bmpBus == nullptr) {
-        Serial.println(" NOT FOUND!");
-        Serial.println("[ERROR] BMP585 not found at 0x47 or 0x46 on any bus");
-        Serial.println("[ERROR] Check SEN0665 sensor connections");
-        while (1) {
-            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-            delay(500);
+    SerialOut.print("        Taking "); SerialOut.print(numSamples); SerialOut.print(" samples: ");
+    double sum = 0.0;
+    double sumSquares = 0.0;
+    float minVal = 0.0;
+    float maxVal = 0.0;
+    int valid = 0;
+    for (int i = 0; i < numSamples; i++) {
+        float reading;
+        if (readPressureRaw(reading)) {  // invalid readings are skipped ("x")
+            sum += reading;
+            sumSquares += (double)reading * reading;
+            if (valid == 0 || reading < minVal) minVal = reading;
+            if (valid == 0 || reading > maxVal) maxVal = reading;
+            valid++;
+            SerialOut.print(".");
+        } else {
+            SerialOut.print("x");
         }
+        delay(CALIB_SAMPLE_SPACING_MS);
     }
-    
-    Serial.print(" (found on "); Serial.print(bmpBusName); Serial.print(")");
-    
-    uint8_t bmpAddr = BMP_I2C_ADDRESS;
-    bmp58x = new DFRobot_BMP58X_I2C(bmpBus, bmpAddr);
-    
-    if (!bmp58x->begin()) {
-        // Try alternate address
-        delete bmp58x;
-        bmpAddr = 0x46;
-        bmp58x = new DFRobot_BMP58X_I2C(bmpBus, bmpAddr);
-        if (!bmp58x->begin()) {
-            Serial.println(" FAILED!");
-            Serial.println("[ERROR] BMP585 found in scan but cannot initialize");
-            Serial.print("[ERROR] Check connections on ");
-            Serial.println(bmpBusName);
-            while (1) {
-                digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-                delay(500);
-            }
-        }
-        Serial.println(" OK (0x46)");
-    } else {
-        Serial.print(" OK (0x"); Serial.print(bmpAddr, HEX); Serial.println(")");
-    }
-    
-    bmp58x->setMeasureMode(bmp58x->eNormal);
-    
-    float tempC = bmp58x->readTempC();
-    float pressPa = bmp58x->readPressPa();
-    if (pressPa > 50000.0) {
-        Serial.print("        T:"); Serial.print(tempC, 1); Serial.print("°C ");
-        Serial.print("P:"); Serial.print(pressPa / 100.0, 1); Serial.println("hPa");
-        Serial.println("        Temperature compensation: ENABLED");
-    }
-    delay(100);
-}
+    SerialOut.println();
 
-// sTune autotuning functions
-void startSTune() {
-    if (desiredAirSpeed < MIN_TUNE_SETPOINT) {
-        Serial.println("\n[sTune] ERROR: Target too low for auto-tune");
-        Serial.print("[sTune] Minimum target: ");
-        Serial.print(MIN_TUNE_SETPOINT, 2);
-        Serial.println(" m/s");
-        Serial.println("[sTune] Set a higher target speed first (e.g., 10)");
-        Serial.println("[sTune] Then type 'stune' to start\n");
+    // With most readings invalid the sensor is not working, and an offset
+    // from the few others would make every later airspeed wrong.
+    if (valid * 2 < numSamples) {
+        SerialOut.print("[ERROR] Only "); SerialOut.print(valid); SerialOut.print(" of ");
+        SerialOut.print(numSamples); SerialOut.println(" readings were valid: the pressure sensor is not responding");
+        SerialOut.print("        Offset unchanged ("); SerialOut.print(pressureOffset, 4);
+        SerialOut.println(" Pa). Check the SEN0343 wiring, then type recal");
+        SerialOut.println("=====================================\n");
         return;
     }
-    
-    // Save current averaging for potential restoration
-    savedAverageSamples = pressureAverageSamples;
-    
-    // Start sTune with appropriate parameters
-    // Parameters: setpoint, inputSpan, outputSpan, outputStart, outputStep, testTime, settleTime, samples
-    float outputStep = desiredAirSpeed * 8.0; // Estimate based on typical response
-    outputStep = constrain(outputStep, 60.0, 200.0);
-    
-    if (sTuner->startTuning(desiredAirSpeed, MAX_AIRSPEED, 255.0, 0.0, outputStep, 60, 5, 300)) {
-        sTuneActive = true;
+
+    float mean = sum / valid;
+    float variance = sumSquares / valid - (double)mean * mean;
+    if (variance < 0) variance = 0;      // rounding can give tiny negatives
+    pressureOffset = mean;
+    resetPressureAverage();              // old samples used the old offset
+
+    SerialOut.println("\n        Calibration Results:");
+    if (valid < numSamples) {
+        SerialOut.print("        Invalid readings skipped: "); SerialOut.println(numSamples - valid);
+    }
+    SerialOut.print("        Min reading: "); SerialOut.print(minVal, 4); SerialOut.println(" Pa");
+    SerialOut.print("        Max reading: "); SerialOut.print(maxVal, 4); SerialOut.println(" Pa");
+    SerialOut.print("        Offset (mean): "); SerialOut.print(pressureOffset, 4); SerialOut.println(" Pa");
+    SerialOut.print("        Noise (std dev): "); SerialOut.print(sqrt(variance), 4); SerialOut.println(" Pa");
+    SerialOut.println("=====================================\n");
+}
+
+// Air density from the barometer (ideal gas law, rho = p / (R T)). The
+// driver returns 0 on a failed read, so implausible values keep the last
+// good density instead.
+float readAirDensity() {
+    float tempC = barometer->readTempC();
+    float pressurePa = barometer->readPressPa();
+    if (tempC < -100.0 || tempC > 100.0 || pressurePa < 50000.0 || pressurePa > 120000.0) {
+        return airDensity;
+    }
+    airTemperatureC = tempC;
+    airDensity = pressurePa / (AIR_GAS_CONSTANT * (tempC + 273.15));
+    return airDensity;
+}
+
+// Pitot equation v = sqrt(2 q / rho). Negative pressure (noise around zero
+// airspeed) is clamped only here, because sqrt needs q >= 0.
+float calcAirspeed(float pressurePa, float density) {
+    if (pressurePa < 0.0) pressurePa = 0.0;
+    if (density < 0.1) density = SEA_LEVEL_AIR_DENSITY;
+    return sqrt(2.0 * pressurePa / density);
+}
+
+// Highest target the sensor can measure in the present air: 95 % of its
+// 500 Pa rating (28.1 m/s at 1.204 kg/m3, 27.3 m/s in cold dense air at
+// 1.276 kg/m3), never above MAX_AIRSPEED.
+float maxAirspeed() {
+    float limit = calcAirspeed(SENSOR_USABLE_FRACTION * SENSOR_MAX_PRESSURE_PA, airDensity);
+    return (limit < MAX_AIRSPEED) ? limit : MAX_AIRSPEED;
+}
+
+// ===========================================================================
+// Fan and PID
+// ===========================================================================
+
+// The only place that writes the fan PWM. It remembers the applied value
+// (used by the rate limit, the tune hand-over and the data line) and skips
+// writes that would change nothing, because sTune calls it on every pass.
+void setFanPwm(int pwm) {
+    pwm = constrain(pwm, 0, 255);
+    if (pwm == fanPwm) return;
+    #if defined(ARDUINO_ARCH_ESP32)
+        // First write: attach the PWM (LEDC) channel with analogWrite(0), then
+        // change its frequency. Before the pin is attached, arduino-esp32
+        // 3.0.0-3.3.0 ignore analogWriteFrequency() (only later versions keep
+        // it for the attach), so this order works on every 3.x core.
+        if (fanPwm < 0 && FAN_PWM_FREQUENCY_HZ > 0) {
+            analogWrite(FAN_PWM_PIN, 0);
+            analogWriteFrequency(FAN_PWM_PIN, FAN_PWM_FREQUENCY_HZ);
+        }
+    #endif
+    analogWrite(FAN_PWM_PIN, pwm);
+    fanPwm = pwm;
+}
+
+// Move the fan towards pwm by at most MAX_PWM_CHANGE_PER_CYCLE (one update).
+void setFanPwmRateLimited(int pwm) {
+    setFanPwm(constrain(pwm, fanPwm - MAX_PWM_CHANGE_PER_CYCLE,
+                        fanPwm + MAX_PWM_CHANGE_PER_CYCLE));
+}
+
+// Stop the fan now and leave the PID idle at zero output and zero target.
+void stopFan() {
+    targetAirspeed = 0;
+    pidOutput = 0;
+    setFanPwm(0);
+    pidBumplessStart();
+}
+
+// Stop the fan now, whatever runs: a tune is aborted (gains unchanged),
+// otherwise the PID is left idle at target 0. Used by the stop command and
+// by the safety checks. The fan is always stopped before anything is
+// printed; callers print their own error message after this call.
+void stopAll(const char *reason) {
+    if (controlMode != MODE_PID) {
+        abortTuning(reason);
+        return;
+    }
+    stopFan();
+    SerialOut.print("[STOP] Fan stopped, target 0 m/s ("); SerialOut.print(reason); SerialOut.println(")");
+}
+
+// Hand the fan to the PID without a bump. Switching QuickPID from manual to
+// timer mode runs its Initialize(): the integral starts at the present
+// output (pidOutput) and the derivative at the present airspeed, so the first
+// Compute() continues smoothly from where the fan is now. (QuickPID's Reset()
+// is never used: it zeroes the integral and drops the output to about 0.)
+void pidBumplessStart() {
+    myPID.SetMode(QuickPID::Control::manual);
+    myPID.SetMode(QuickPID::Control::timer);
+}
+
+// Normal closed-loop operation, once per update interval.
+void runPidControl() {
+    // Target 0 means "fan off": hold PWM at 0 instead of computing. While the
+    // fan coasts down, the falling airspeed would otherwise make the D and
+    // P-on-measurement terms push PWM up again. stopFan() also keeps the PID
+    // initialised, so a new target starts smoothly from 0 PWM.
+    if (targetAirspeed <= 0) {
+        stopFan();
+        return;
+    }
+
+    // PWM rate limit without integral windup. With P and D on measurement,
+    // QuickPID's output is sum + D: the running sum holds the integral and
+    // the P action and is the controller's only memory, while the D term is
+    // recomputed from the latest airspeed change and never stored.
+    //
+    // 1. Anti-windup: the sum may move at most MAX_PWM_CHANGE_PER_CYCLE per
+    //    update, as fast as the fan may follow. When a large error asks for
+    //    more (e.g. a big setpoint step), the excess is dropped instead of
+    //    stored, so the sum never runs ahead of the fan and there is nothing
+    //    to unwind later.
+    // 2. Fan: sum + D, at most MAX_PWM_CHANGE_PER_CYCLE from the present PWM.
+    //    A clipped D kick is only delayed, never stored, because the limit
+    //    in step 1 is taken around the last sum and not around the fan PWM.
+    //
+    // The limit must not be a SetOutputLimits() window around the fan PWM:
+    // such a window clamps the sum as well and moves with every D kick, so
+    // D action piles up in the sum and the loop oscillates.
+    float sumBefore = myPID.GetOutputSum();
+    myPID.Compute();
+    float sum = myPID.GetOutputSum();
+    float sumLimited = constrain(sum, sumBefore - MAX_PWM_CHANGE_PER_CYCLE,
+                                 sumBefore + MAX_PWM_CHANGE_PER_CYCLE);
+    if (sumLimited != sum) {
+        myPID.SetOutputSum(sumLimited);
+        // Compute()'s own output formula. It is sum + D only because P is on
+        // measurement (already inside the sum); P on error would add a term.
+        pidOutput = constrain(sumLimited + myPID.GetDterm(), 0.0f, 255.0f);
+    }
+    setFanPwmRateLimited((int)round(pidOutput));
+}
+
+// Clamp the gains to the allowed ranges (reporting any that were clamped)
+// and give them to the PID. Used by manual entry and both auto-tuners.
+// SetTunings() keeps the integral, so the change takes effect without a bump.
+// A set with a non-finite value is refused as a whole: constrain() passes
+// nan through, and a nan gain makes the PID output nan, which the ESP32-P4
+// turns into PWM 255.
+bool applyGains(float newKp, float newKi, float newKd) {
+    if (!isfinite(newKp) || !isfinite(newKi) || !isfinite(newKd)) {
+        SerialOut.println("[ERROR] PID gains must be finite numbers - gains unchanged");
+        return false;
+    }
+    kp = clampGain("Kp", newKp, KP_MIN, KP_MAX);
+    ki = clampGain("Ki", newKi, KI_MIN, KI_MAX);
+    kd = clampGain("Kd", newKd, KD_MIN, KD_MAX);
+    myPID.SetTunings(kp, ki, kd);
+    SerialOut.print("[PID] Gains set: Kp="); SerialOut.print(kp, 3);
+    SerialOut.print(" Ki="); SerialOut.print(ki, 3);
+    SerialOut.print(" Kd="); SerialOut.println(kd, 3);
+    return true;
+}
+
+float clampGain(const char *name, float value, float minValue, float maxValue) {
+    float clamped = constrain(value, minValue, maxValue);
+    if (clamped != value) {
+        SerialOut.print("[PID] "); SerialOut.print(name); SerialOut.print(" = "); SerialOut.print(value, 3);
+        SerialOut.print(" is outside "); SerialOut.print(minValue, 1); SerialOut.print("-");
+        SerialOut.print(maxValue, 1); SerialOut.print(", clamped to "); SerialOut.println(clamped, 3);
+    }
+    return clamped;
+}
+
+// ===========================================================================
+// Safety checks
+// ===========================================================================
+
+// A run of invalid readings (dead bus, unplugged sensor) means the airspeed
+// is unknown, so the fan must not run. Stops it in any mode and again on
+// every new target or tune until the sensor gives valid data.
+void checkPressureSensor() {
+    if (invalidPressureReads < MAX_INVALID_PRESSURE_READS) return;
+    if (controlMode == MODE_PID && targetAirspeed <= 0 && fanPwm == 0) return;   // already off
+    stopAll("no valid pressure data");
+    SerialOut.println("[ERROR] Differential pressure sensor not responding");
+}
+
+// Once per update in PID mode and during the relay tune. The fan is driven
+// hard (fanDriven: PID at full power, relay at its high level) but (almost)
+// no airflow is measured for a long time: the measurement is lost, e.g. a
+// pitot hose came off (or the fan has no power). The controller would keep
+// pushing while the real airspeed may be far above the target (and the
+// sensor range). The driven time is added up since airflow was last seen,
+// not required in one piece: near 0 m/s the noisy reading makes the PID's D
+// term pull the PWM below 250 for single updates every few seconds.
+// fanState names the drive level in the error message. Returns true if it
+// stopped the fan (a tune is aborted).
+bool checkAirflow(bool fanDriven, const char *fanState) {
+    if (targetAirspeed <= 0 || currentAirspeed >= NO_AIRFLOW_SPEED) {
+        noAirflowDrivenMs = 0;
+        return false;
+    }
+    if (fanDriven) noAirflowDrivenMs += UPDATE_INTERVAL_MS;
+    if (noAirflowDrivenMs < NO_AIRFLOW_TIMEOUT_MS) return false;
+    noAirflowDrivenMs = 0;
+    stopAll("no airflow");
+    SerialOut.print("[ERROR] No airflow measured at "); SerialOut.print(fanState);
+    SerialOut.println(" - check the pitot tubes and the fan");
+    return true;
+}
+
+// ===========================================================================
+// Auto-tuning: relay tune and sTune
+// ===========================================================================
+
+// Auto-tunes only work with a clear airspeed signal around the target.
+bool tuneTargetOk() {
+    if (targetAirspeed >= MIN_TUNE_SETPOINT) return true;
+    SerialOut.print("[ERROR] Set a target of at least "); SerialOut.print(MIN_TUNE_SETPOINT, 1);
+    SerialOut.println(" m/s before tuning (e.g. 10, then tune or stune)");
+    return false;
+}
+
+// Start a relay tune around the present target. pwmLow/pwmHigh = -1 means
+// "estimate the PWM levels from the target".
+void startRelayTune(int pwmLow, int pwmHigh) {
+    if (!tuneTargetOk()) return;
+    // The relay switches back to LOW only above target + hysteresis, so that
+    // airspeed must still be measurable.
+    if (targetAirspeed + RELAY_HYSTERESIS > maxAirspeed()) {
+        SerialOut.print("[ERROR] Relay tune needs target + "); SerialOut.print(RELAY_HYSTERESIS, 1);
+        SerialOut.print(" m/s within the sensor limit of "); SerialOut.print(maxAirspeed(), 1);
+        SerialOut.println(" m/s - set a lower target");
+        return;
+    }
+
+    bool autoRange = (pwmLow < 0 || pwmHigh < 0);
+    if (autoRange) {
+        int estimatedPwm = (int)round(targetAirspeed * FAN_PWM_PER_MPS_ESTIMATE);
+        pwmHigh = constrain(estimatedPwm + RELAY_AUTO_PWM_OFFSET,
+                            RELAY_AUTO_HIGH_MIN, RELAY_AUTO_HIGH_MAX);
+        pwmLow = constrain(estimatedPwm - RELAY_AUTO_PWM_OFFSET,
+                           RELAY_AUTO_LOW_MIN, RELAY_AUTO_LOW_MAX);
+    } else if (pwmLow >= pwmHigh) {
+        SerialOut.println("[ERROR] PWM low must be less than PWM high (e.g. tune 40 100)");
+        return;
+    }
+    relayPwmLow = pwmLow;
+    relayPwmHigh = pwmHigh;
+
+    SerialOut.println("\n=====================================");
+    SerialOut.println("[RELAY] AUTO-TUNE STARTING");
+    SerialOut.println("=====================================");
+    SerialOut.print("[RELAY] Target airspeed: "); SerialOut.print(targetAirspeed, 2); SerialOut.println(" m/s");
+    SerialOut.println("[RELAY] Method: Astrom-Hagglund relay, Pessen integral rule");
+    SerialOut.print("[RELAY] PWM range: "); SerialOut.print(relayPwmLow);
+    SerialOut.print(" - "); SerialOut.print(relayPwmHigh);
+    SerialOut.println(autoRange ? " (estimated; if tuning fails try e.g. tune 40 100)" : " (manual)");
+    SerialOut.print("[RELAY] Hysteresis: +/-"); SerialOut.print(RELAY_HYSTERESIS, 2);
+    SerialOut.print(" m/s, cycles needed: "); SerialOut.print(REQUIRED_CYCLES);
+    SerialOut.print(", timeout: "); SerialOut.print(RELAY_TIMEOUT_MS / 1000); SerialOut.println(" s");
+    SerialOut.println("[RELAY] Type 0 or stop to abort");
+    SerialOut.println("=====================================");
+
+    tuneStartTime = millis();
+    noAirflowDrivenMs = 0;
+    firstCrossing = true;
+    peakHigh = currentAirspeed;
+    peakLow = currentAirspeed;
+    relayCycles = 0;
+    sumPeriodsS = 0.0;
+    sumAmplitudes = 0.0;
+    setRelay(false);                     // start low; the first switch is LOW->HIGH
+    controlMode = MODE_RELAY_TUNE;
+}
+
+// One relay step per update interval.
+void runRelayTune() {
+    // The relay levels are fixed, so a strong fan can overshoot the sensor
+    // range; sTune has the same limit as its emergency stop.
+    if (currentAirspeed > MAX_AIRSPEED) {
+        abortTuning("airspeed above MAX_AIRSPEED");
+        return;
+    }
+    // A lost pitot signal reads as "too slow", so the relay would stay HIGH
+    // until the timeout, even at PWM 255.
+    if (checkAirflow(relayHigh, "the high relay PWM")) return;
+
+    if (currentAirspeed > peakHigh) peakHigh = currentAirspeed;
+    if (currentAirspeed < peakLow) peakLow = currentAirspeed;
+
+    if (!relayHigh && currentAirspeed < targetAirspeed - RELAY_HYSTERESIS) {
+        setRelay(true);
+    } else if (relayHigh && currentAirspeed > targetAirspeed + RELAY_HYSTERESIS) {
+        setRelay(false);
+        recordRelayCycle();
+        if (relayCycles >= REQUIRED_CYCLES) {
+            completeRelayTune();
+            return;
+        }
+    }
+
+    if (millis() - tuneStartTime > RELAY_TIMEOUT_MS) {
+        abortTuning("relay tune timeout");   // fan off before the advice below
+        SerialOut.print("[RELAY] Not enough oscillation: ");
+        SerialOut.print(relayCycles); SerialOut.print(" of "); SerialOut.print(REQUIRED_CYCLES);
+        SerialOut.println(" valid cycles");
+        SerialOut.println("        - Check fan power and the PWM wiring");
+        SerialOut.println("        - Make sure the target lies between the speeds of the two PWM levels");
+        SerialOut.println("        - Try a manual range, e.g. tune 40 100");
     }
 }
 
+// Apply the low or high relay level. The status line is optional and is
+// skipped if it does not fit completely (see serialHasRoom()).
+void setRelay(bool high) {
+    relayHigh = high;
+    int pwm = high ? relayPwmHigh : relayPwmLow;
+    pidOutput = pwm;
+    setFanPwm(pwm);
+    if (!serialHasRoom(STATUS_LINE_MAX_LENGTH)) return;
+    SerialOut.print("[RELAY] Switched to "); SerialOut.print(high ? "HIGH" : "LOW");
+    SerialOut.print(" (PWM "); SerialOut.print(pwm);
+    SerialOut.print(") at V="); SerialOut.print(currentAirspeed, 2); SerialOut.println(" m/s");
+}
+
+// Called at every HIGH->LOW switch: one full oscillation cycle has ended.
+void recordRelayCycle() {
+    unsigned long now = millis();
+    if (!firstCrossing) {
+        unsigned long periodMs = now - lastCrossingTime;
+        float amplitude = (peakHigh - peakLow) / 2.0;
+        if (amplitude > MIN_CYCLE_AMPLITUDE && periodMs > MIN_CYCLE_PERIOD_MS) {
+            relayCycles++;
+            sumPeriodsS += periodMs / 1000.0;
+            sumAmplitudes += amplitude;
+            if (serialHasRoom(STATUS_LINE_MAX_LENGTH)) {   // optional, see setRelay()
+                SerialOut.print("[RELAY] Cycle "); SerialOut.print(relayCycles);
+                SerialOut.print(" | Period: "); SerialOut.print(periodMs / 1000.0, 1); SerialOut.print(" s");
+                SerialOut.print(" | Amplitude: "); SerialOut.print(amplitude, 2); SerialOut.println(" m/s");
+            }
+        }
+    }
+    // Every HIGH->LOW switch (the first one too) starts a new cycle window,
+    // so the peaks always belong to exactly one cycle.
+    firstCrossing = false;
+    lastCrossingTime = now;
+    peakHigh = currentAirspeed;
+    peakLow = currentAirspeed;
+}
+
+// Enough cycles: compute Ku and Tu, then the PID gains.
+void completeRelayTune() {
+    float tu = sumPeriodsS / relayCycles;              // ultimate period, s
+    float amplitude = sumAmplitudes / relayCycles;     // a, m/s
+    // Describing function of a relay with output amplitude d = (high-low)/2:
+    // Ku = 4d / (pi a) = 2 (high - low) / (pi a), in PWM per m/s.
+    float ku = 2.0 * (relayPwmHigh - relayPwmLow) / (PI * amplitude);
+
+    // Pessen integral rule: Kp = 0.7 Ku, Ti = 0.4 Tu, Td = 0.15 Tu
+    float newKp = 0.7 * ku;
+    float newKi = 1.75 * ku / tu;        // Kp / Ti
+    float newKd = 0.105 * ku * tu;       // Kp * Td
+
+    SerialOut.println("\n=====================================");
+    SerialOut.println("[RELAY] AUTO-TUNE COMPLETE");
+    SerialOut.println("=====================================");
+    // Relay estimates: the hysteresis band shifts the oscillation away from
+    // the true ultimate point, so these are approximations of Ku and Tu.
+    SerialOut.print("        Period Tu (relay estimate): "); SerialOut.print(tu, 2); SerialOut.println(" s");
+    SerialOut.print("        Amplitude: "); SerialOut.print(amplitude, 2); SerialOut.println(" m/s");
+    SerialOut.print("        Ultimate gain Ku (relay estimate): "); SerialOut.print(ku, 3);
+    SerialOut.println(" PWM per m/s");
+    SerialOut.print("        Pessen integral rule: Kp="); SerialOut.print(newKp, 3);
+    SerialOut.print(" Ki="); SerialOut.print(newKi, 3);
+    SerialOut.print(" Kd="); SerialOut.println(newKd, 3);
+    // The tune always ends at a HIGH->LOW switch, i.e. at the low relay PWM,
+    // which is below what the target needs, so the airspeed would dip after
+    // the hand-over. Start the PID from the mean relay output instead (the
+    // PWM that held the oscillation around the target), within the rate limit.
+    setFanPwmRateLimited((relayPwmLow + relayPwmHigh) / 2);
+    finishTuning(newKp, newKi, newKd);
+}
+
+void startSTune() {
+    if (!tuneTargetOk()) return;
+
+    // Step PWM (sTune's "outputStep" is the PWM during the step, not the size
+    // of the step): the estimated PWM for the target, within the step limits.
+    float outputStep = constrain(targetAirspeed * FAN_PWM_PER_MPS_ESTIMATE,
+                                 STUNE_STEP_PWM_MIN, STUNE_STEP_PWM_MAX);
+
+    // The step starts with the fan running, not stopped: near 0 m/s the pitot
+    // signal is mostly noise and sTune then finds a wrong dead time. After the
+    // settle time every run starts from the same steady airspeed, whatever the
+    // fan did before. The top of the step is unchanged, so is the peak airspeed.
+    // MAX_AIRSPEED is the input span and the emergency stop.
+    float outputStart = round(outputStep * STUNE_START_FRACTION);
+    if (sTuner->startTuning(targetAirspeed, MAX_AIRSPEED, 255.0, outputStart, outputStep,
+                            STUNE_TEST_TIME_S, STUNE_SETTLE_TIME_S, STUNE_SAMPLES)) {
+        controlMode = MODE_STUNE;
+        setFanPwm((int)round(pidOutput));   // start PWM now: the settle time runs from here
+    }
+}
+
+// sTune step test, called on every loop() pass. sTune sets pidOutput through
+// the pointer it was given; setFanPwm() only writes when the value changes.
 void runSTune() {
-    // Update sTune state machine
     STunePIDTuner::TuningStatus status = sTuner->update();
-    
-    // Write PWM output (sTuner manages the output value via currPWM pointer)
-    analogWrite(PWM_pin, (int)round(currPWM));
-    
+
     if (status == STunePIDTuner::COMPLETED) {
-        // Get tuned gains and apply to PID
         float newKp, newKi, newKd;
         if (sTuner->getTunedGains(newKp, newKi, newKd)) {
-            Kp = newKp;
-            Ki = newKi;
-            Kd = newKd;
-            
-            myPID.SetTunings(Kp, Ki, Kd);
-            myPID.Reset();
-            
-            Serial.println("[sTune] Gains applied to PID controller");
-            Serial.println("[sTune] Resuming normal operation");
+            sTuner->printReport();
+            finishTuning(newKp, newKi, newKd);
+        } else {
+            abortTuning("sTune found no usable step response");
         }
-        
-        // Restore averaging setting
-        setPressureAverageSamples(savedAverageSamples);
-        
-        sTuneActive = false;
+        return;
+    }
+    if (status == STunePIDTuner::TIMEOUT) {
+        abortTuning("sTune timeout");
+        return;
+    }
+    if (status == STunePIDTuner::ERROR) {
+        abortTuning("airspeed above MAX_AIRSPEED");
+        return;
+    }
+
+    setFanPwm((int)round(pidOutput));
+}
+
+// End a running relay tune or sTune without applying any gains (user abort,
+// timeout, safety check or tuner error): fan off, target 0, PID
+// re-initialised. The fan is stopped before anything is printed.
+void abortTuning(const char *reason) {
+    bool wasSTune = (controlMode == MODE_STUNE);
+    controlMode = MODE_PID;
+    stopFan();
+    SerialOut.print("\n[TUNE] Tuning aborted (");
+    SerialOut.print(reason);
+    SerialOut.println(") - fan stopped, target 0 m/s, gains unchanged\n");
+    if (wasSTune) {
+        sTuner->printReport();           // sTune's own details (model, timeout)
         sTuner->reset();
-        lastPWMOutput = 0;
-        
-    } else if (status == STunePIDTuner::TIMEOUT || status == STunePIDTuner::ERROR) {
-        Serial.println("[sTune] Tuning failed - keeping previous gains");
-        
-        // Restore averaging setting
-        setPressureAverageSamples(savedAverageSamples);
-        
-        sTuneActive = false;
-        sTuner->reset();
-        currPWM = 0;
-        analogWrite(PWM_pin, 0);
-        lastPWMOutput = 0;
+    }
+}
+
+// A tune succeeded: apply the gains and hand the fan to the PID at its
+// present PWM and the tune target, so the fan keeps running smoothly.
+void finishTuning(float newKp, float newKi, float newKd) {
+    if (!applyGains(newKp, newKi, newKd)) {
+        abortTuning("the tuner gave invalid gains");
+        return;
+    }
+    if (controlMode == MODE_STUNE) sTuner->reset();
+    controlMode = MODE_PID;
+    pidOutput = fanPwm;                  // PWM the fan runs at now
+    pidBumplessStart();
+    SerialOut.print("[TUNE] PID running at target "); SerialOut.print(targetAirspeed, 2);
+    SerialOut.println(" m/s with the new gains");
+    SerialOut.print("[TUNE] To reuse these gains later: tune ");
+    SerialOut.print(kp, 3); SerialOut.print(" "); SerialOut.print(ki, 3); SerialOut.print(" "); SerialOut.println(kd, 3);
+    SerialOut.println("=====================================\n");
+}
+
+// ===========================================================================
+// Serial commands
+// ===========================================================================
+
+// Collect typed characters without blocking and run each complete line.
+// A line ends with LF, CR or CR+LF. Until the first of these arrives, a line
+// also ends when no new character has arrived for SERIAL_LINE_TIMEOUT_MS, so
+// the serial monitor's "No line ending" setting works too. Once the terminal
+// has shown that it ends its lines, the timeout is off: terminals that send
+// every key at once would otherwise split a command typed with a pause, e.g.
+// "tune" + pause + " 20 8 12" would start a relay tune instead of setting gains.
+void pollSerialCommands() {
+    while (Serial.available() > 0) {
+        char c = (char)Serial.read();
+        lastSerialCharTime = millis();
+        if (c == '\n' || c == '\r') {
+            lineEndingSeen = true;
+            endSerialLine();
+        } else if (serialLineLength < SERIAL_LINE_SIZE - 1) {
+            serialLine[serialLineLength++] = c;
+        } else {
+            serialLineTooLong = true;    // discard the rest of this line
+        }
+    }
+    bool partialLine = serialLineLength > 0 || serialLineTooLong;
+    if (partialLine && !lineEndingSeen && millis() - lastSerialCharTime >= SERIAL_LINE_TIMEOUT_MS) {
+        endSerialLine();
+    }
+}
+
+// Run the collected line (if any) and start a new one.
+void endSerialLine() {
+    if (serialLineTooLong) {
+        SerialOut.print("[ERROR] Line too long (max ");
+        SerialOut.print(SERIAL_LINE_SIZE - 1);
+        SerialOut.println(" characters) - ignored");
+    } else if (serialLineLength > 0) {
+        serialLine[serialLineLength] = '\0';
+        handleCommand(serialLine);
+    }
+    serialLineLength = 0;
+    serialLineTooLong = false;
+}
+
+// Run one command line. Keywords are case-insensitive.
+void handleCommand(char *line) {
+    char *words[MAX_COMMAND_WORDS];
+    int count = splitWords(line, words, MAX_COMMAND_WORDS);
+    if (count == 0) return;              // blank line
+
+    const char *cmd = words[0];
+    float number = 0.0;
+    bool isNumber = parseDecimal(cmd, number);
+
+    // Stop works in every mode, including during a tune. A stop must never
+    // be refused, so any line that starts with "stop" counts ("stop now").
+    if (wordIs(cmd, "stop") || (count == 1 && isNumber && number == 0.0)) {
+        stopAll("stopped by user");
+        return;
+    }
+    if (count > MAX_COMMAND_WORDS) {
+        SerialOut.println("[ERROR] Too many values - type 'help' for the command list");
+        return;
+    }
+
+    // While a tuner drives the fan, nothing else may change its state.
+    if (controlMode != MODE_PID) {
+        SerialOut.println("[BUSY] Tuning in progress - type 0 or stop to abort");
+        return;
+    }
+
+    if (wordIs(cmd, "help")) {
+        printHelp();
+    } else if (wordIs(cmd, "tune")) {
+        if (count == 1) {
+            startRelayTune();            // automatic PWM range
+        } else if (count == 3) {
+            int pwmLow, pwmHigh;
+            if (parseWholeNumber(words[1], 1, 255, pwmLow) &&
+                parseWholeNumber(words[2], 1, 255, pwmHigh)) {
+                startRelayTune(pwmLow, pwmHigh);
+            } else {
+                SerialOut.println("[ERROR] PWM values must be whole numbers 1-255");
+                SerialOut.println("        Usage: tune <low> <high>   Example: tune 40 100");
+            }
+        } else if (count == 4) {
+            setManualGains(words[1], words[2], words[3]);
+        } else {
+            SerialOut.println("[ERROR] Usage: tune | tune <low> <high> | tune <Kp> <Ki> <Kd>");
+        }
+    } else if (wordIs(cmd, "stune") && count == 1) {
+        startSTune();
+    } else if (wordIs(cmd, "recal")) {
+        int samples = DEFAULT_CALIB_SAMPLES;
+        if (count > 2 || (count == 2 &&
+            !parseWholeNumber(words[1], MIN_CALIB_SAMPLES, MAX_CALIB_SAMPLES, samples))) {
+            SerialOut.print("[ERROR] Calibration samples must be between ");
+            SerialOut.print(MIN_CALIB_SAMPLES); SerialOut.print(" and ");
+            SerialOut.println(MAX_CALIB_SAMPLES);
+            return;
+        }
+        calibratePressureSensor(samples);
+    } else if (wordIs(cmd, "avg")) {
+        int samples;
+        if (count == 2 && parseWholeNumber(words[1], MIN_AVG_SAMPLES, MAX_AVG_SAMPLES, samples)) {
+            setPressureAverageSamples(samples);
+        } else {
+            SerialOut.print("[ERROR] Averaging samples must be between ");
+            SerialOut.print(MIN_AVG_SAMPLES); SerialOut.print(" and ");
+            SerialOut.println(MAX_AVG_SAMPLES);
+        }
+    } else if (isNumber && count == 1) {
+        setTargetAirspeed(number);
+    } else {
+        SerialOut.print("[ERROR] Unknown command or wrong number of values: '");
+        SerialOut.print(cmd);
+        SerialOut.println("' - type 'help' for the command list");
+    }
+}
+
+// Split a line in place into words separated by spaces or tabs.
+// Returns the number of words, or maxWords + 1 if there are more.
+int splitWords(char *line, char *words[], int maxWords) {
+    int count = 0;
+    char *p = line;
+    while (true) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') return count;
+        if (count == maxWords) return maxWords + 1;
+        words[count++] = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') p++;
+        if (*p != '\0') *p++ = '\0';
+    }
+}
+
+// Case-insensitive match of a typed word against a lower-case keyword.
+bool wordIs(const char *word, const char *keyword) {
+    while (*word != '\0' && *keyword != '\0') {
+        if (tolower((unsigned char)*word) != *keyword) return false;
+        word++;
+        keyword++;
+    }
+    return *word == *keyword;
+}
+
+// Parse a plain decimal number such as "12", "-3" or "7.5". The whole word
+// must be a number, so "10abc", "1e3", "nan" or "inf" are rejected and a typo
+// can never turn into a fan speed.
+bool parseDecimal(const char *text, float &value) {
+    const char *p = text;
+    if (*p == '+' || *p == '-') p++;
+    bool hasDigit = false;
+    bool hasPoint = false;
+    for (; *p != '\0'; p++) {
+        if (isdigit((unsigned char)*p)) {
+            hasDigit = true;
+        } else if (*p == '.' && !hasPoint) {
+            hasPoint = true;
+        } else {
+            return false;
+        }
+    }
+    if (!hasDigit) return false;
+    value = (float)atof(text);
+    return isfinite(value);              // very long digit strings overflow to inf
+}
+
+// Parse a whole number and check that it lies in [minValue, maxValue].
+bool parseWholeNumber(const char *text, int minValue, int maxValue, int &value) {
+    float f;
+    if (!parseDecimal(text, f) || f != floorf(f) || f < minValue || f > maxValue) {
+        return false;
+    }
+    value = (int)f;
+    return true;
+}
+
+void setTargetAirspeed(float target) {
+    if (target < 0) {
+        SerialOut.println("[ERROR] Negative airspeed not allowed");
+        return;
+    }
+    float limit = maxAirspeed();
+    if (target > limit) {
+        SerialOut.print("[WARN] Capping at "); SerialOut.print(limit, 2);
+        SerialOut.println(" m/s (sensor limit in the present air)");
+        target = limit;
+    }
+    // Only the setpoint changes; the PID continues smoothly from the present PWM.
+    targetAirspeed = target;
+    SerialOut.print("[SERIAL] New target: "); SerialOut.print(targetAirspeed, 2); SerialOut.println(" m/s");
+}
+
+// tune <Kp> <Ki> <Kd>: set the PID gains by hand.
+void setManualGains(const char *kpText, const char *kiText, const char *kdText) {
+    float newKp, newKi, newKd;
+    if (!parseDecimal(kpText, newKp) || !parseDecimal(kiText, newKi) ||
+        !parseDecimal(kdText, newKd) || newKp <= 0 || newKi < 0 || newKd < 0) {
+        SerialOut.println("[ERROR] Invalid PID values");
+        SerialOut.println("        Usage: tune <Kp> <Ki> <Kd>   Example: tune 20 8 12");
+        return;
+    }
+    applyGains(newKp, newKi, newKd);
+}
+
+// ===========================================================================
+// Output
+// ===========================================================================
+
+void printBanner() {
+    SerialOut.println("\n\n=====================================");
+    SerialOut.print  ("   EDU Wind Tunnel PID Controller v"); SerialOut.println(FIRMWARE_VERSION);
+    SerialOut.print  ("   Board: "); SerialOut.println(BOARD_NAME);
+    SerialOut.println("   Sensors: DFRobot SEN0343 (LWLP5000) + SEN0665 (BMP585)");
+    SerialOut.print  ("   Build: "); SerialOut.print(__DATE__); SerialOut.print(" "); SerialOut.println(__TIME__);
+    SerialOut.println("=====================================");
+}
+
+void printHelp() {
+    SerialOut.println("COMMANDS (type a line and press Enter):");
+    SerialOut.print  ("  <m/s>                Set target airspeed, 0 to "); SerialOut.print(maxAirspeed(), 1);
+    SerialOut.println(" (e.g. 10)");
+    SerialOut.println("  0 or stop            Stop the fan now (also aborts a running tune)");
+    SerialOut.println("  tune                 Relay auto-tune, automatic PWM range");
+    SerialOut.println("  tune <low> <high>    Relay auto-tune, PWM range 1-255 (e.g. tune 40 100)");
+    SerialOut.println("  tune <Kp> <Ki> <Kd>  Set PID gains (e.g. tune 20 8 12)");
+    SerialOut.print  ("                       Ranges: Kp "); SerialOut.print(KP_MIN, 0); SerialOut.print("-");
+    SerialOut.print(KP_MAX, 0); SerialOut.print(", Ki "); SerialOut.print(KI_MIN, 1); SerialOut.print("-");
+    SerialOut.print(KI_MAX, 0); SerialOut.print(", Kd "); SerialOut.print(KD_MIN, 1); SerialOut.print("-");
+    SerialOut.println(KD_MAX, 0);
+    SerialOut.println("  stune                sTune step-response auto-tune");
+    SerialOut.print  ("  recal [N]            Stop the fan and re-zero the pressure sensor (N = ");
+    SerialOut.print(MIN_CALIB_SAMPLES); SerialOut.print("-"); SerialOut.print(MAX_CALIB_SAMPLES);
+    SerialOut.println(" samples)");
+    SerialOut.print  ("  avg <N>              Pressure moving-average length (");
+    SerialOut.print(MIN_AVG_SAMPLES); SerialOut.print("-"); SerialOut.print(MAX_AVG_SAMPLES);
+    SerialOut.println(")");
+    SerialOut.println("  help                 Show this list");
+    SerialOut.print  ("Auto-tunes need a target of at least "); SerialOut.print(MIN_TUNE_SETPOINT, 1);
+    SerialOut.println(" m/s. During a tune only 0 or stop is accepted.");
+    SerialOut.println("DATA: time | V airspeed | SP target | PWM 0-255 | P pitot Pa | Temp C | Err SP-V");
+}
+
+// One line per update interval (format in the header comment). The relay
+// tune shows its own elapsed time and cycle count; sTune shows its phase.
+void printDataLine(unsigned long now, float pressure) {
+    // A line that does not fit completely (see serialHasRoom()) is skipped and counted;
+    // the next line that fits reports the count.
+    if (!serialHasRoom(DATA_LINE_MAX_LENGTH)) {
+        skippedDataLines++;
+        return;
+    }
+    dataLineCount++;
+    if (controlMode == MODE_STUNE) {
+        SerialOut.print("[sTune] "); SerialOut.print(sTuner->getStatusString()); SerialOut.print(" | ");
+    } else if (controlMode == MODE_RELAY_TUNE) {
+        // millis(), not now: a tune started by a command in this pass began after now
+        SerialOut.print("[TUNE] "); SerialOut.print((millis() - tuneStartTime) / 1000); SerialOut.print("s | ");
+        SerialOut.print("Cycle:"); SerialOut.print(relayCycles); SerialOut.print(" | ");
+    } else {
+        SerialOut.print((now - runStartTime) / 1000); SerialOut.print("s | ");
+    }
+    SerialOut.print("V:"); SerialOut.print(currentAirspeed, 2);
+    SerialOut.print(" | SP:"); SerialOut.print(targetAirspeed, 2);
+    SerialOut.print(" | PWM:"); SerialOut.print(fanPwm);
+    SerialOut.print(" | P:"); SerialOut.print(pressure, 2);
+    SerialOut.print(" | Temp:"); SerialOut.print(airTemperatureC, 1);
+    SerialOut.print(" | Err:"); SerialOut.print(targetAirspeed - currentAirspeed, 2);
+
+    // Every 20th line in PID mode: the active gains and averaging length
+    if (dataLineCount % 20 == 0 && controlMode == MODE_PID) {
+        SerialOut.print(" | Kp:"); SerialOut.print(kp, 1);
+        SerialOut.print(" Ki:"); SerialOut.print(ki, 1);
+        SerialOut.print(" Kd:"); SerialOut.print(kd, 1);
+        SerialOut.print(" Avg:"); SerialOut.print(pressureAverageSamples);
+    }
+    if (skippedDataLines > 0) {
+        SerialOut.print(" | Skipped:"); SerialOut.print(skippedDataLines);
+        skippedDataLines = 0;
+    }
+    SerialOut.println();
+}
+
+// The PID assumes one Compute() per update interval. If a pass takes longer
+// (slow sensor, long serial output) the loop runs slower than configured, so
+// say so - at most every 10 s to keep the data stream readable.
+void warnIfSlowPass(unsigned long passMs) {
+    if (passMs <= UPDATE_INTERVAL_MS) return;
+    if (millis() - lastSlowPassWarning < SLOW_PASS_WARNING_INTERVAL_MS) return;
+    lastSlowPassWarning = millis();
+    SerialOut.print("[WARN] Update pass took "); SerialOut.print(passMs);
+    SerialOut.print(" ms (interval "); SerialOut.print(UPDATE_INTERVAL_MS);
+    SerialOut.println(" ms) - control runs slower than configured");
+}
+
+// Fatal error: keep the fan off and stop here for good. Blinking the status
+// LED (if the board has one) shows the fault even without a serial monitor.
+// The sketch never continues, because running the fan without valid sensor
+// data would mean running it without control.
+void haltWithError(const char *msg) {
+    setFanPwm(0);
+    SerialOut.print("[FATAL] ");
+    SerialOut.println(msg);
+    SerialOut.println("[FATAL] System halted with the fan off. Fix the fault and reset the board.");
+    bool ledOn = false;
+    while (true) {
+        if (STATUS_LED_PIN >= 0) {
+            ledOn = !ledOn;
+            digitalWrite(STATUS_LED_PIN, ledOn ? HIGH : LOW);
+        }
+        delay(250);
     }
 }

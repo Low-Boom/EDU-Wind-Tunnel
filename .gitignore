@@ -1,1 +1,5 @@
 _codeql_detected_source_root
+
+# Build output
+.pio/
+build/
