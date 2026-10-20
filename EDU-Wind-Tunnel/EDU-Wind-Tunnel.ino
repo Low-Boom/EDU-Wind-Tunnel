@@ -271,6 +271,9 @@ void setup() {
     // configured sample time for the I and D scaling.
     // P and D on measurement: a setpoint step does not kick the output.
     // Conditional anti-windup: the integral stops growing while saturated.
+    // The output limits stay at the full PWM range; the rate limit acts on
+    // the fan after Compute() (see runPidControl()).
+    myPID.SetOutputLimits(0, 255);
     myPID.SetSampleTimeUs(UPDATE_INTERVAL_MS * 1000);
     myPID.SetTunings(kp, ki, kd, QuickPID::pMode::pOnMeas, QuickPID::dMode::dOnMeas,
                      QuickPID::iAwMode::iAwCondition);
@@ -538,7 +541,6 @@ void stopFan() {
 // is never used: it zeroes the integral and drops the output to about 0.)
 void pidBumplessStart() {
     myPID.SetMode(QuickPID::Control::manual);
-    myPID.SetOutputLimits(0, 255);       // drop the rate-limit window of the last pass
     myPID.SetMode(QuickPID::Control::timer);
 }
 
@@ -553,14 +555,22 @@ void runPidControl() {
         return;
     }
 
-    // PWM rate limit: the output may move at most MAX_PWM_CHANGE_PER_CYCLE
-    // from the present PWM. Doing this through the PID's output limits (not
-    // after Compute()) also clamps the integral, so it cannot wind up while
-    // the fan is still ramping.
-    myPID.SetOutputLimits(constrain(fanPwm - MAX_PWM_CHANGE_PER_CYCLE, 0, 255),
-                          constrain(fanPwm + MAX_PWM_CHANGE_PER_CYCLE, 0, 255));
     myPID.Compute();
-    setFanPwm((int)round(currPWM));
+
+    // PWM rate limit, applied to the fan only: the fan PWM follows the PID
+    // output by at most MAX_PWM_CHANGE_PER_CYCLE per update. It must not be
+    // done with the PID's output limits. With P on measurement, QuickPID's
+    // running sum carries the P and I action, and output limits clamp that
+    // sum as well. A +/-25 window around the fan PWM would drag the sum
+    // along whenever the D term pushes the output to the window edge, so a
+    // short D kick would become a lasting PWM change and the loop would
+    // oscillate. The price here is a short lead of the PID output over the
+    // fan while it ramps (windup). A full 0-255 ramp takes only about 10
+    // updates and QuickPID still clamps its sum to 0-255, so the lead stays
+    // small.
+    setFanPwm(constrain((int)round(currPWM),
+                        fanPwm - MAX_PWM_CHANGE_PER_CYCLE,
+                        fanPwm + MAX_PWM_CHANGE_PER_CYCLE));
 }
 
 // Clamp the gains to the allowed ranges (reporting any that were clamped)
