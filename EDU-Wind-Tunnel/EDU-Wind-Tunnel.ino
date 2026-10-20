@@ -58,10 +58,11 @@ const float MAX_AIRSPEED = 30.0;
 const float MIN_AIRSPEED = 0.0;
 const float Specific_gas_constant = 287.058;
 
-// Pressure sensor calibration
-float pressureOffset = 0.0;
-bool calibrated = false;
-int calibrationSamples = 50;  // Default calibration samples (adjustable)
+// Pressure sensor calibration (zero offset, measured with the fan off)
+float pressureOffset = 0.0;              // Pa, subtracted from every reading
+const int DEFAULT_CALIB_SAMPLES = 50;
+const int CALIBRATION_SETTLE_S = 15;     // fan run-down + thermal settling before zeroing
+const unsigned long CALIB_SAMPLE_SPACING_MS = 100;
 const int MIN_CALIB_SAMPLES = 5;
 const int MAX_CALIB_SAMPLES = 100;
 
@@ -161,11 +162,11 @@ void abortTuning(const char *reason);
 void runPidControl();
 void printDataLine(unsigned long now, float pressure);
 void printHelp();
-void calibratePressureSensor(bool skipWait = false, int numSamples = -1);
-float readPressureSensorRawUncalibrated();
-float readPressureSensorRaw();
-float readPressureSensorOversampled();
-float readPressureSensorAveraged();
+void calibratePressureSensor(int numSamples);
+float readPressureRaw();
+float readPressureCorrected();
+float readPressureAveraged();
+void resetPressureAverage();
 float readBarometerSensor();
 float calcCurrentAirSpeed(float pressure, float AirDensity);
 unsigned int RPMcalc();
@@ -209,11 +210,6 @@ void setup() {
     Serial.println("=====================================");
     Serial.flush();
     delay(100);
-
-    // Initialize pressure buffer
-    for (int i = 0; i < MAX_AVG_SAMPLES; i++) {
-        pressureBuffer[i] = 0.0;
-    }
 
     // Initialize I2C
     Serial.print("[INIT] I2C bus...");
@@ -263,8 +259,8 @@ void setup() {
     Serial.println("        OK");
     delay(100);
 
-    // Calibrate pressure sensor with 30 second wait (startup only)
-    calibratePressureSensor(false);
+    // Zero the pressure sensor (same routine as the 'recal' command)
+    calibratePressureSensor(DEFAULT_CALIB_SAMPLES);
 
     // Configure QuickPID for full PID control
     Serial.print("[INIT] QuickPID Controller (Full PID)...");
@@ -323,7 +319,7 @@ void loop() {
     debugCounter++;
 
     // 1. Sensors: fresh airspeed for both the commands and the controller
-    float currPressure = readPressureSensorAveraged();   // Oversampled + Averaged
+    float currPressure = readPressureAveraged();         // Oversampled + Averaged
     float currAirDensity = readBarometerSensor();        // Temperature compensated
     currentAirSpeed = calcCurrentAirSpeed(currPressure, currAirDensity);
 
@@ -671,13 +667,7 @@ void setPressureAverageSamples(int samples) {
     
     if (samples != pressureAverageSamples) {
         pressureAverageSamples = samples;
-        
-        // Reset averaging buffer
-        pressureBufferIndex = 0;
-        pressureBufferFilled = false;
-        for (int i = 0; i < MAX_AVG_SAMPLES; i++) {
-            pressureBuffer[i] = 0.0;
-        }
+        resetPressureAverage();
         
         Serial.print("[CONFIG] Pressure averaging set to ");
         Serial.print(pressureAverageSamples);
@@ -693,111 +683,55 @@ void setPressureAverageSamples(int samples) {
     }
 }
 
-void calibratePressureSensor(bool skipWait, int numSamples) {
-    // Use provided numSamples, or default if not specified
-    int samples = (numSamples > 0) ? numSamples : calibrationSamples;
-    samples = constrain(samples, MIN_CALIB_SAMPLES, MAX_CALIB_SAMPLES);
-    
+// Zero the differential pressure sensor: the mean of numSamples raw readings
+// taken in still air becomes the offset. The fan is always stopped first,
+// because any airflow during calibration would be stored as "zero" and make
+// every later airspeed reading wrong.
+void calibratePressureSensor(int numSamples) {
+    stopFan();
+
     Serial.println("\n[CALIB] Pressure Sensor Calibration");
     Serial.println("=====================================");
-    Serial.println("        **CRITICAL - READ CAREFULLY**");
-    Serial.println("        1. Ensure NO airflow in tunnel");
-    Serial.println("        2. Both pitot ports open to atmosphere");
-    Serial.println("        3. Fan must be completely OFF");
-    
-    if (!skipWait) {
-        Serial.println("        4. Let system settle for thermal stability");
-        Serial.println("");
-        Serial.println("        Waiting 15 seconds...");
-        Serial.println("=====================================");
-        
-        for (int i = 15; i > 0; i--) {
-            Serial.print("        ");
-            if (i < 10) Serial.print(" ");
-            Serial.print(i);
-            Serial.println(" seconds remaining...");
-            delay(1000);
-        }
-    } else {
-        Serial.println("        4. Waiting 3 seconds...");
-        Serial.println("=====================================");
-        delay(3000);
+    Serial.println("        Fan stopped. Keep the tunnel still:");
+    Serial.println("        - no airflow, both pitot ports open to the room");
+    Serial.print  ("        Waiting "); Serial.print(CALIBRATION_SETTLE_S);
+    Serial.println(" s for the fan to stop and readings to settle...");
+    for (int i = CALIBRATION_SETTLE_S; i > 0; i--) {
+        Serial.print("        ");
+        if (i < 10) Serial.print(" ");
+        Serial.print(i);
+        Serial.println(" seconds remaining...");
+        delay(1000);
     }
-    
-    Serial.println("\n        Starting calibration measurements...");
-    Serial.print("        Using "); Serial.print(samples); 
-    Serial.println(" uncalibrated oversampled readings");
-    
-    float sum = 0;
-    int validSamples = 0;
-    float minVal = 999999;
-    float maxVal = -999999;
-    
-    Serial.print("        Taking "); Serial.print(samples); Serial.print(" samples: ");
-    
-    // Take calibration samples WITHOUT applying offset (use raw uncalibrated function)
-    for (int i = 0; i < samples; i++) {
-        float sum_oversample = 0.0;
-        int validReads = 0;
-        
-        // Oversample the raw sensor
-        for (int j = 0; j < PRESSURE_OVERSAMPLES; j++) {
-            float reading = readPressureSensorRawUncalibrated();
-            if (reading >= 0.0) {
-                sum_oversample += reading;
-                validReads++;
-            }
-            delayMicroseconds(500);
-        }
-        
-        if (validReads > 0) {
-            float avgReading = sum_oversample / validReads;
-            sum += avgReading;
-            validSamples++;
-            minVal = min(minVal, avgReading);
-            maxVal = max(maxVal, avgReading);
-            Serial.print(".");
-        } else {
-            Serial.print("X");
-        }
-        delay(100);
+
+    Serial.print("        Taking "); Serial.print(numSamples); Serial.print(" samples: ");
+    double sum = 0.0;
+    double sumSquares = 0.0;
+    float minVal = 0.0;
+    float maxVal = 0.0;
+    for (int i = 0; i < numSamples; i++) {
+        float reading = readPressureRaw();
+        sum += reading;
+        sumSquares += (double)reading * reading;
+        if (i == 0 || reading < minVal) minVal = reading;
+        if (i == 0 || reading > maxVal) maxVal = reading;
+        Serial.print(".");
+        delay(CALIB_SAMPLE_SPACING_MS);
     }
     Serial.println();
-    
-    if (validSamples > samples / 2) {
-        pressureOffset = sum / validSamples;
-        calibrated = true;
-        
-        Serial.println("\n        Calibration Results:");
-        Serial.print("        Valid samples: "); Serial.print(validSamples); 
-        Serial.print(" / "); Serial.println(samples);
-        Serial.print("        Min reading: "); Serial.print(minVal, 4); Serial.println(" Pa");
-        Serial.print("        Max reading: "); Serial.print(maxVal, 4); Serial.println(" Pa");
-        Serial.print("        Range: "); Serial.print(maxVal - minVal, 4); Serial.println(" Pa");
-        Serial.print("        Average (offset): "); Serial.print(pressureOffset, 4); Serial.println(" Pa");
-        Serial.print("        Std Dev est: "); 
-        Serial.print((maxVal - minVal) / sqrt(validSamples), 4); Serial.println(" Pa");
-        Serial.println("        Status: SUCCESS ✓");
-        Serial.println("=====================================\n");
-        
-        // Reset averaging buffer after calibration
-        pressureBufferIndex = 0;
-        pressureBufferFilled = false;
-        for (int i = 0; i < MAX_AVG_SAMPLES; i++) {
-            pressureBuffer[i] = 0.0;
-        }
-        
-    } else {
-        Serial.println("\n        [ERROR] Calibration FAILED!");
-        Serial.print("        Valid samples: "); Serial.print(validSamples); 
-        Serial.print(" / "); Serial.println(samples);
-        Serial.println("        Using zero offset (uncalibrated mode)");
-        Serial.println("        WARNING: Readings may be inaccurate!");
-        Serial.println("=====================================\n");
-        pressureOffset = 0.0;
-        calibrated = false;
-    }
-    delay(500);
+
+    float mean = sum / numSamples;
+    float variance = sumSquares / numSamples - (double)mean * mean;
+    if (variance < 0) variance = 0;              // rounding can give tiny negatives
+    pressureOffset = mean;
+    resetPressureAverage();                      // old samples used the old offset
+
+    Serial.println("\n        Calibration Results:");
+    Serial.print("        Min reading: "); Serial.print(minVal, 4); Serial.println(" Pa");
+    Serial.print("        Max reading: "); Serial.print(maxVal, 4); Serial.println(" Pa");
+    Serial.print("        Offset (mean): "); Serial.print(pressureOffset, 4); Serial.println(" Pa");
+    Serial.print("        Noise (std dev): "); Serial.print(sqrt(variance), 4); Serial.println(" Pa");
+    Serial.println("=====================================\n");
 }
 
 float readBarometerSensor() { 
@@ -818,67 +752,49 @@ float readBarometerSensor() {
     return density;
 }
 
-float readPressureSensorRawUncalibrated() {
-    DFRobot_LWLP::sLwlp_t data = lwlp.getData();
-    // "presure" is the correct field name (library spelling)
-    float pressure = data.presure;
-    if (pressure < 0.0) pressure = 0.0;
-    return pressure;
+// One raw sensor reading in Pa. The LWLP library already subtracts the
+// reading it took at power-on; calibration removes what is left of the zero
+// error. Blocks for about 60 ms (the library waits for the conversion).
+float readPressureRaw() {
+    return lwlp.getData().presure;   // "presure" is the library's spelling
 }
 
-float readPressureSensorRaw() { 
-    DFRobot_LWLP::sLwlp_t data = lwlp.getData();
-    float pressure = data.presure;
-    
-    if (calibrated) {
-        pressure -= pressureOffset;
-    }
-    
-    if (pressure < 0.0) pressure = 0.0;
-    return pressure;
-}
-
-float readPressureSensorOversampled() {
+// Oversampled reading minus the calibration offset. Kept signed on purpose:
+// at zero airspeed the noise swings both ways, and clamping negative values
+// here would bias the moving average (and the airspeed) upward.
+float readPressureCorrected() {
     float sum = 0.0;
-    int validReads = 0;
-    
     for (int i = 0; i < PRESSURE_OVERSAMPLES; i++) {
-        float reading = readPressureSensorRaw();
-        if (reading >= 0.0) {
-            sum += reading;
-            validReads++;
-        }
-        delayMicroseconds(500);
+        sum += readPressureRaw();
     }
-    
-    if (validReads > 0) {
-        return sum / validReads;
-    }
-    
-    return 0.0;
+    return sum / PRESSURE_OVERSAMPLES - pressureOffset;
 }
 
-float readPressureSensorAveraged() {
-    float singleReading = readPressureSensorOversampled();
-    
-    pressureBuffer[pressureBufferIndex] = singleReading;
+// Moving average over the last pressureAverageSamples corrected readings.
+float readPressureAveraged() {
+    pressureBuffer[pressureBufferIndex] = readPressureCorrected();
     pressureBufferIndex++;
-    
     if (pressureBufferIndex >= pressureAverageSamples) {
         pressureBufferIndex = 0;
         pressureBufferFilled = true;
     }
-    
-    float sum = 0;
-    int samplesToAverage = pressureBufferFilled ? pressureAverageSamples : pressureBufferIndex;
-    
-    for (int i = 0; i < samplesToAverage; i++) {
+
+    int count = pressureBufferFilled ? pressureAverageSamples : pressureBufferIndex;
+    float sum = 0.0;
+    for (int i = 0; i < count; i++) {
         sum += pressureBuffer[i];
     }
-    
-    return (samplesToAverage > 0) ? (sum / samplesToAverage) : 0.0;
+    return sum / count;      // count >= 1: one sample was just stored
 }
 
+// Forget old samples (after a new offset or a new averaging length).
+void resetPressureAverage() {
+    pressureBufferIndex = 0;
+    pressureBufferFilled = false;
+}
+
+// Pitot equation v = sqrt(2 q / rho). Negative pressure (noise around zero
+// airspeed) is the only place that is clamped, because sqrt needs q >= 0.
 float calcCurrentAirSpeed(float pressure, float AirDensity) { 
     if (pressure < 0.0) pressure = 0.0;
     if (AirDensity < 0.1) AirDensity = 1.225;
@@ -969,7 +885,7 @@ void handleCommand(char *line) {
     } else if (wordIs(cmd, "stune") && count == 1) {
         startSTune();
     } else if (wordIs(cmd, "recal")) {
-        int samples = calibrationSamples;
+        int samples = DEFAULT_CALIB_SAMPLES;
         if (count > 2 || (count == 2 &&
             !parseWholeNumber(words[1], MIN_CALIB_SAMPLES, MAX_CALIB_SAMPLES, samples))) {
             Serial.print("[ERROR] Calibration samples must be between ");
@@ -977,9 +893,7 @@ void handleCommand(char *line) {
             Serial.println(MAX_CALIB_SAMPLES);
             return;
         }
-        Serial.println("\n[CMD] Recalibrating pressure sensor...");
-        Serial.println("        Stop the fan and ensure no airflow!");
-        calibratePressureSensor(true, samples);
+        calibratePressureSensor(samples);
     } else if (wordIs(cmd, "avg")) {
         int samples;
         if (count == 2 && parseWholeNumber(words[1], MIN_AVG_SAMPLES, MAX_AVG_SAMPLES, samples)) {
