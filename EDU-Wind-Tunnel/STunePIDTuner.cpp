@@ -8,7 +8,7 @@
  */
 
 #include "STunePIDTuner.h"
-#include "PlatformConfig.h" // serialHasRoom()
+#include "SerialOut.h"      // SerialOut, serialHasRoom()
 #include <new>      // placement new
 #include <string.h> // memset, strlen
 #include <math.h>   // INFINITY, isfinite
@@ -18,9 +18,10 @@ static bool isPositiveFinite(float x) {
 }
 
 // Progress messages are optional (the sketch's data lines show the phase as
-// well), so one that would block the loop is skipped (see serialHasRoom()).
+// well), so one that does not fit completely into the transmit buffer is
+// skipped (see serialHasRoom()).
 static void printProgress(const char *line) {
-    if (serialHasRoom((int)strlen(line) + 2)) Serial.println(line);   // + CR LF
+    if (serialHasRoom((int)strlen(line) + 2)) SerialOut.println(line);   // + CR LF
 }
 
 STunePIDTuner::STunePIDTuner(float *input, float *output, sTune::TuningMethod tuningMethod)
@@ -77,7 +78,7 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
                                  uint16_t samples) {
     
     if (setpoint <= 0.0) {
-        Serial.println("[sTune] ERROR: Invalid setpoint (must be > 0)");
+        SerialOut.println("[sTune] ERROR: Invalid setpoint (must be > 0)");
         _status = ERROR;
         return false;
     }
@@ -94,6 +95,30 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     _ki = 0.0;
     _kd = 0.0;
     
+    // Safety net only: sTune itself ends the test after settle + test time.
+    // The margin covers update passes that run a little slow.
+    _timeout = (settleTimeSec + testTimeSec) * 1500; // ms: + 50 %
+
+    // Report first, then start the run: sTune's settle time starts in
+    // Configure() and the wrapper's timeout at _startTime, so no printing
+    // comes between them and the start PWM (the caller applies it at once).
+    SerialOut.println("\n=====================================");
+    SerialOut.println("[sTune] AUTOTUNING STARTED");
+    SerialOut.println("=====================================");
+    SerialOut.print("[sTune] Target setpoint: "); SerialOut.print(_setpoint, 2); SerialOut.println(" m/s");
+    SerialOut.print("[sTune] Method: Inflection Point ("); SerialOut.print(getTuningMethodName()); SerialOut.println(")");
+    SerialOut.println("\n[sTune] Configuration:");
+    SerialOut.print("        Input span: "); SerialOut.print(inputSpan, 1); SerialOut.println(" m/s");
+    SerialOut.print("        Output span: "); SerialOut.print(outputSpan, 0); SerialOut.println(" PWM");
+    SerialOut.print("        Step: "); SerialOut.print(outputStart, 0); SerialOut.print(" -> ");
+    SerialOut.print(outputStep, 0); SerialOut.println(" PWM");
+    SerialOut.print("        Test time: "); SerialOut.print(testTimeSec); SerialOut.println(" sec");
+    SerialOut.print("        Settle time: "); SerialOut.print(settleTimeSec); SerialOut.println(" sec");
+    SerialOut.print("        Samples: "); SerialOut.println(samples);
+    SerialOut.print("        Timeout: "); SerialOut.print(_timeout / 1000); SerialOut.println(" sec");
+    SerialOut.println("=====================================");
+    SerialOut.println("[sTune] Starting settling phase...");
+
     // Fresh sTune object for this run, then configure it.
     // Memory: Configure() -> sTan::begin() allocates a new float[samples * 0.06]
     // buffer for the sliding tangent on every call and never frees the old
@@ -113,36 +138,15 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     // life of the object, holds the output at outputStart without telling
     // the caller, and leaves the run to end only by the timeout.
     _tuner->SetEmergencyStop(INFINITY);
-    
-    // Safety net only: sTune itself ends the test after settle + test time.
-    // The margin covers update passes that run a little slow.
-    _timeout = (settleTimeSec + testTimeSec) * 1500; // ms: + 50 %
+
     _startTime = millis();
     _status = SETTLING;
-    
-    Serial.println("\n=====================================");
-    Serial.println("[sTune] AUTOTUNING STARTED");
-    Serial.println("=====================================");
-    Serial.print("[sTune] Target setpoint: "); Serial.print(_setpoint, 2); Serial.println(" m/s");
-    Serial.print("[sTune] Method: Inflection Point ("); Serial.print(getTuningMethodName()); Serial.println(")");
-    Serial.println("\n[sTune] Configuration:");
-    Serial.print("        Input span: "); Serial.print(inputSpan, 1); Serial.println(" m/s");
-    Serial.print("        Output span: "); Serial.print(outputSpan, 0); Serial.println(" PWM");
-    Serial.print("        Step: "); Serial.print(outputStart, 0); Serial.print(" -> ");
-    Serial.print(outputStep, 0); Serial.println(" PWM");
-    Serial.print("        Test time: "); Serial.print(testTimeSec); Serial.println(" sec");
-    Serial.print("        Settle time: "); Serial.print(settleTimeSec); Serial.println(" sec");
-    Serial.print("        Samples: "); Serial.println(samples);
-    Serial.print("        Timeout: "); Serial.print(_timeout / 1000); Serial.println(" sec");
-    Serial.println("=====================================");
-    Serial.println("[sTune] Starting settling phase...");
-    
+
     return true;
 }
 
-// When a run ends (COMPLETED, TIMEOUT, ERROR) nothing is printed here: the
-// caller stops the fan or hands it to the PID first and then calls
-// printReport(), because printing can block (see serialHasRoom()).
+// When a run ends (COMPLETED, TIMEOUT, ERROR) nothing is printed here; the
+// caller acts on the status and then calls printReport().
 STunePIDTuner::TuningStatus STunePIDTuner::update() {
     // Check timeout
     if (_status != IDLE && _status != COMPLETED && _status != ERROR) {
@@ -265,43 +269,43 @@ void STunePIDTuner::printReport() {
         // sTune takes each sample at least one sample period after the
         // previous one, so late update passes add up. It only falls 50 %
         // behind when loop() runs far too slowly.
-        Serial.print("[sTune] TIMEOUT: no result after "); Serial.print(_timeout / 1000);
-        Serial.println(" s (settle + test time + 50 %)");
-        Serial.println("[sTune] The control loop ran too slowly for the step test. Look for");
-        Serial.println("        [WARN] Update pass took ... messages: slow sensor reads point to");
-        Serial.println("        I2C trouble (wiring, long cables, loose connectors).");
-        Serial.println("        Then type stune again, or use the relay tune (tune).");
+        SerialOut.print("[sTune] TIMEOUT: no result after "); SerialOut.print(_timeout / 1000);
+        SerialOut.println(" s (settle + test time + 50 %)");
+        SerialOut.println("[sTune] The control loop ran too slowly for the step test. Look for");
+        SerialOut.println("        [WARN] Update pass took ... messages: slow sensor reads point to");
+        SerialOut.println("        I2C trouble (wiring, long cables, loose connectors).");
+        SerialOut.println("        Then type stune again, or use the relay tune (tune).");
         return;
     }
     if (_status == ERROR) {
-        Serial.print("[sTune] ABORT: airspeed "); Serial.print(_eStopInput, 2);
-        Serial.print(" m/s above the limit of "); Serial.print((_eStop > 0.0) ? _eStop : _inputSpan, 2);
-        Serial.println(" m/s");
+        SerialOut.print("[sTune] ABORT: airspeed "); SerialOut.print(_eStopInput, 2);
+        SerialOut.print(" m/s above the limit of "); SerialOut.print((_eStop > 0.0) ? _eStop : _inputSpan, 2);
+        SerialOut.println(" m/s");
         return;
     }
     if (_status != COMPLETED) return;    // stopped by the user: nothing to add
 
-    Serial.println("\n=====================================");
-    Serial.println(_gainsValid ? "[sTune] AUTOTUNING COMPLETE" : "[sTune] NO USABLE STEP RESPONSE");
-    Serial.println("=====================================");
-    Serial.print("[sTune] Duration: "); Serial.print((millis() - _startTime) / 1000);
-    Serial.println(" seconds");
-    Serial.println("[sTune] Process model from the step response:");
-    Serial.print("        Process gain: "); Serial.print(getProcessGain() * _inputSpan / _outputSpan, 4);
-    Serial.println(" m/s per PWM");
-    Serial.print("        Dead time: "); Serial.print(getDeadTime(), 2); Serial.println(" s");
-    Serial.print("        Time constant (Tau): "); Serial.print(getTau(), 2); Serial.println(" s");
+    SerialOut.println("\n=====================================");
+    SerialOut.println(_gainsValid ? "[sTune] AUTOTUNING COMPLETE" : "[sTune] NO USABLE STEP RESPONSE");
+    SerialOut.println("=====================================");
+    SerialOut.print("[sTune] Duration: "); SerialOut.print((millis() - _startTime) / 1000);
+    SerialOut.println(" seconds");
+    SerialOut.println("[sTune] Process model from the step response:");
+    SerialOut.print("        Process gain: "); SerialOut.print(getProcessGain() * _inputSpan / _outputSpan, 4);
+    SerialOut.println(" m/s per PWM");
+    SerialOut.print("        Dead time: "); SerialOut.print(getDeadTime(), 2); SerialOut.println(" s");
+    SerialOut.print("        Time constant (Tau): "); SerialOut.print(getTau(), 2); SerialOut.println(" s");
     if (_gainsValid) {
-        Serial.print("[sTune] PID gains ("); Serial.print(getTuningMethodName()); Serial.println("):");
-        Serial.print("        Kp = "); Serial.println(_kp, 4);
-        Serial.print("        Ki = "); Serial.println(_ki, 4);
-        Serial.print("        Kd = "); Serial.println(_kd, 4);
+        SerialOut.print("[sTune] PID gains ("); SerialOut.print(getTuningMethodName()); SerialOut.println("):");
+        SerialOut.print("        Kp = "); SerialOut.println(_kp, 4);
+        SerialOut.print("        Ki = "); SerialOut.println(_ki, 4);
+        SerialOut.print("        Kd = "); SerialOut.println(_kd, 4);
     } else {
-        Serial.println("[sTune] The airspeed did not rise clearly after the step, so no gains");
-        Serial.println("        can be computed. Check fan power, the PWM wiring and the pitot");
-        Serial.println("        hoses, or set a higher target (larger step), then try again.");
+        SerialOut.println("[sTune] The airspeed did not rise clearly after the step, so no gains");
+        SerialOut.println("        can be computed. Check fan power, the PWM wiring and the pitot");
+        SerialOut.println("        hoses, or set a higher target (larger step), then try again.");
     }
-    Serial.println("=====================================\n");
+    SerialOut.println("=====================================\n");
 }
 
 float STunePIDTuner::getProcessGain() const {

@@ -67,7 +67,7 @@ The firmware has these safety functions:
 | Airspeed limit | The firmware changes a target above the sensor limit to the limit. The limit is 28.0 m/s, or less in dense (cold) air. | `[WARN] Capping at 28.00 m/s (sensor limit in the present air)` |
 | Over-speed during an auto-tune | An airspeed above 28.0 m/s stops the auto-tune and the fan. | `[TUNE] Tuning aborted (airspeed above MAX_AIRSPEED) - fan stopped, target 0 m/s, gains unchanged` |
 | Sensor fault at start-up | The firmware halts with the fan off. The board LED blinks if the board has an `LED_BUILTIN` (see [HARDWARE.md](HARDWARE.md#check-the-sensors-at-start-up)). | `[FATAL] System halted with the fan off. Fix the fault and reset the board.` |
-| Blocked serial port | On a native USB port, the firmware skips data lines while the computer does not read the port. Thus the stop command and the checks continue to work. | `Skipped:<n>` at the end of the next data line |
+| Blocked serial port | On a native USB port, the firmware waits at most 50 ms for a computer that does not read the port. It skips data lines, and other text is lost. Thus the stop command, the PID and the checks continue to work. | `Skipped:<n>` at the end of the next data line; `[WARN] <n> bytes of output lost: the host did not read` |
 | Input check | The firmware accepts only plain decimal numbers. A typing error cannot become a fan speed. | `[ERROR] Unknown command or wrong number of values: ...` |
 
 ---
@@ -212,6 +212,8 @@ Additional parts at the end of a data line:
 
 - ` | Kp:<Kp> Ki:<Ki> Kd:<Kd> Avg:<N>`: the present gains and averaging length. Every 20th line in PID mode (no auto-tune running), thus every 4 s.
 - ` | Skipped:<n>`: the number of data lines that the firmware did not show, because the computer did not read the serial port. This occurs only on a native USB port: the Uno R4 Minima, and the ESP32-P4 with **Tools > USB CDC On Boot: Enabled**.
+
+On these ports, the firmware waits at most 50 ms for the computer to read. Other text that does not fit into the transmit buffer in this time is lost. When the computer reads again, the next text starts with `[WARN] <n> bytes of output lost: the host did not read`.
 
 During an auto-tune, the data lines start differently:
 

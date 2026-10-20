@@ -107,9 +107,7 @@ public:
     /**
      * Print how the last run ended: the process model and gains (COMPLETED),
      * or why it ended early (TIMEOUT, ERROR). update() prints nothing when a
-     * run ends, so the caller can stop the fan first (printing can block on
-     * a native USB port; see serialHasRoom() in PlatformConfig.h). Call it
-     * before reset().
+     * run ends, so the caller can stop the fan first. Call it before reset().
      */
     void printReport();
 

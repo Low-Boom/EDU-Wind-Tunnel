@@ -42,7 +42,7 @@ static void registerDevice(uint8_t address, TwoWire* bus, const char* busName) {
 }
 
 // Helper function to scan a single I2C bus
-static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
+static void scanSingleBus(TwoWire *wire, const char* busName, Print &out) {
     out.print("Scanning I2C bus ");
     out.println(busName);
     
@@ -114,7 +114,7 @@ static void scanSingleBus(TwoWire *wire, const char* busName, Stream &out) {
     out.println();
 }
 
-void scanAllI2CBuses(Stream &out) {
+void scanAllI2CBuses(Print &out) {
     // Clear the device registry before scanning
     deviceCount = 0;
     

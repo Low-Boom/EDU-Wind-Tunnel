@@ -37,9 +37,9 @@
  * 
  * Safe to call even if Wire.begin() already called with custom pins.
  * 
- * @param out Output stream for results (typically Serial)
+ * @param out Where the results are printed (the sketch passes SerialOut)
  */
-void scanAllI2CBuses(Stream &out);
+void scanAllI2CBuses(Print &out);
 
 /**
  * Find which I2C bus a device with the given address is on

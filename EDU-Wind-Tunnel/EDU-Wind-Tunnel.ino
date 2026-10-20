@@ -28,6 +28,7 @@
 #include "PlatformConfig.h"     // board pins: FAN_PWM_PIN, I2C pins, STATUS_LED_PIN
 #include "I2CScanner.h"
 #include "STunePIDTuner.h"
+#include "SerialOut.h"           // all text output (bounded wait), serialHasRoom()
 
 // ===========================================================================
 // Settings
@@ -151,9 +152,14 @@ const int MAX_COMMAND_WORDS = 4;         // longest command: tune <Kp> <Ki> <Kd>
 // a new character, so the serial monitor's "No line ending" setting works too.
 const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
 
-// Serial output. Routine lines are skipped while they would block (see
+// Serial output (see SerialOut.h). Routine lines are printed only if they
+// fit completely into the transmit buffer and are skipped otherwise (see
 // serialHasRoom()), so they need a known maximum length.
-const int DATA_LINE_MAX_LENGTH = 128;    // longest data line, with all suffixes
+// Longest data line with all suffixes and CR LF: 138 characters (7-digit
+// uptime, |P| < 2400 Pa, V < 102 m/s, Temp -100.0, the largest gains,
+// Avg:50, 10-digit Skipped count). The limit must stay below the smallest
+// USB transmit buffer (256 bytes), or no data line would ever be printed.
+const int DATA_LINE_MAX_LENGTH = 160;
 const int STATUS_LINE_MAX_LENGTH = 64;   // longest relay switch or cycle line
 const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;   // at most one per 10 s
 
@@ -293,7 +299,7 @@ void setup() {
 
     // I2C. Keep the core default clock (100 kHz standard mode): both sensors
     // support it and it is more forgiving of long sensor wires than 400 kHz.
-    Serial.print("[INIT] I2C bus...");
+    SerialOut.print("[INIT] I2C bus...");
     #if defined(ARDUINO_ARCH_ESP32)
         bool i2cStarted = Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);   // -1 = board default
         int sdaPin = (I2C_SDA_PIN >= 0) ? I2C_SDA_PIN : SDA;
@@ -306,23 +312,23 @@ void setup() {
         unsigned long clockKHz = 100;    // Wire.begin() always sets 100 kHz (no getter)
     #endif
     if (!i2cStarted) {
-        Serial.println(" FAILED");
+        SerialOut.println(" FAILED");
         haltWithError("I2C bus could not be started - check I2C_SDA_PIN/I2C_SCL_PIN in PlatformConfig.h");
     }
-    Serial.print(" OK (SDA "); Serial.print(sdaPin); Serial.print(", SCL "); Serial.print(sclPin);
-    Serial.print(", "); Serial.print(clockKHz); Serial.println(" kHz)");
-    scanAllI2CBuses(Serial);
+    SerialOut.print(" OK (SDA "); SerialOut.print(sdaPin); SerialOut.print(", SCL "); SerialOut.print(sclPin);
+    SerialOut.print(", "); SerialOut.print(clockKHz); SerialOut.println(" kHz)");
+    scanAllI2CBuses(SerialOut);
 
     initPressureSensor();
     initBarometer();
 
-    Serial.println("[INIT] Fan PWM...");
-    Serial.print("        Pin: "); Serial.println(FAN_PWM_PIN);
-    Serial.print("        Frequency: ");
+    SerialOut.println("[INIT] Fan PWM...");
+    SerialOut.print("        Pin: "); SerialOut.println(FAN_PWM_PIN);
+    SerialOut.print("        Frequency: ");
     if (FAN_PWM_FREQUENCY_HZ > 0) {
-        Serial.print(FAN_PWM_FREQUENCY_HZ); Serial.println(" Hz");
+        SerialOut.print(FAN_PWM_FREQUENCY_HZ); SerialOut.println(" Hz");
     } else {
-        Serial.println("core default");
+        SerialOut.println("core default");
     }
     setFanPwm(0);
 
@@ -346,24 +352,24 @@ void setup() {
     myPID.SetTunings(kp, ki, kd, QuickPID::pMode::pOnMeas, QuickPID::dMode::dOnMeas,
                      QuickPID::iAwMode::iAwClamp);
     pidBumplessStart();
-    Serial.println("[INIT] QuickPID controller... OK");
-    Serial.print("        Update interval: "); Serial.print(UPDATE_INTERVAL_MS); Serial.println(" ms");
-    Serial.print("        Kp="); Serial.print(kp, 1);
-    Serial.print(", Ki="); Serial.print(ki, 1);
-    Serial.print(", Kd="); Serial.println(kd, 1);
-    Serial.println("        P and D on measurement, anti-windup by clamping");
-    Serial.print("        PWM rate limit: +/-"); Serial.print(MAX_PWM_CHANGE_PER_CYCLE);
-    Serial.println(" per update");
+    SerialOut.println("[INIT] QuickPID controller... OK");
+    SerialOut.print("        Update interval: "); SerialOut.print(UPDATE_INTERVAL_MS); SerialOut.println(" ms");
+    SerialOut.print("        Kp="); SerialOut.print(kp, 1);
+    SerialOut.print(", Ki="); SerialOut.print(ki, 1);
+    SerialOut.print(", Kd="); SerialOut.println(kd, 1);
+    SerialOut.println("        P and D on measurement, anti-windup by clamping");
+    SerialOut.print("        PWM rate limit: +/-"); SerialOut.print(MAX_PWM_CHANGE_PER_CYCLE);
+    SerialOut.println(" per update");
 
     sTuner = new STunePIDTuner(&currentAirspeed, &pidOutput, STUNE_METHOD);
     sTuner->setEmergencyStop(MAX_AIRSPEED);
-    Serial.print("[INIT] sTune... OK (method: ");
-    Serial.print(sTuner->getTuningMethodName()); Serial.println(")");
+    SerialOut.print("[INIT] sTune... OK (method: ");
+    SerialOut.print(sTuner->getTuningMethodName()); SerialOut.println(")");
 
-    Serial.println("=====================================");
-    Serial.println("[READY] System initialized");
+    SerialOut.println("=====================================");
+    SerialOut.println("[READY] System initialized");
     printHelp();
-    Serial.println("=====================================\n");
+    SerialOut.println("=====================================\n");
 
     runStartTime = millis();
     lastUpdate = millis();
@@ -418,32 +424,37 @@ void loop() {
 // probed on each bus (header and, on the Uno R4 WiFi, Qwiic). The driver
 // takes its bus in the constructor, so it is created once the bus is known.
 void initPressureSensor() {
-    Serial.print("[INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)...");
+    SerialOut.print("[INIT] LWLP5000 differential pressure sensor (DFRobot SEN0343)...");
     const char *busName = nullptr;
     TwoWire *bus = probeDeviceBus(LWLP_ADDRESS, &busName);
     if (bus == nullptr) {
-        Serial.println(" NOT FOUND");
-        Serial.println("[ERROR] No device at 0x00 on any I2C bus; check the SEN0343 wiring");
+        SerialOut.println(" NOT FOUND");
+        SerialOut.println("[ERROR] No device at 0x00 on any I2C bus; check the SEN0343 wiring");
         haltWithError("Differential pressure sensor not responding");
     }
 
-    lwlp = new DFRobot_LWLP(bus);
+    // Static, not new: the constructor sets only the bus, and begin() reads
+    // the drift member before it writes it (it subtracts the drift from the
+    // readings it averages). Static storage is zero-filled before the
+    // constructor runs, so that first drift is 0; heap memory is not.
+    static DFRobot_LWLP sensor(bus);
+    lwlp = &sensor;
     if (lwlp->begin() != 0) {
-        Serial.println(" FAILED");
-        Serial.print("[ERROR] Device found on "); Serial.print(busName);
-        Serial.println(" but it does not respond like an LWLP5000");
+        SerialOut.println(" FAILED");
+        SerialOut.print("[ERROR] Device found on "); SerialOut.print(busName);
+        SerialOut.println(" but it does not respond like an LWLP5000");
         haltWithError("Differential pressure sensor not responding");
     }
-    Serial.print(" OK (on "); Serial.print(busName); Serial.println(")");
-    Serial.print("        Averaging: "); Serial.print(pressureAverageSamples);
-    Serial.println(" samples");
+    SerialOut.print(" OK (on "); SerialOut.print(busName); SerialOut.println(")");
+    SerialOut.print("        Averaging: "); SerialOut.print(pressureAverageSamples);
+    SerialOut.println(" samples");
 }
 
 // Find the BMP585 in the scan results (default address first, then the
 // alternative) and start it. The driver takes the address in its constructor,
 // so it is created once, after the address is known.
 void initBarometer() {
-    Serial.print("[INIT] BMP585 barometer (DFRobot SEN0665)...");
+    SerialOut.print("[INIT] BMP585 barometer (DFRobot SEN0665)...");
     const char *busName = nullptr;
     uint8_t address = BMP585_ADDRESS;
     TwoWire *bus = getDeviceBus(address, &busName);
@@ -452,26 +463,26 @@ void initBarometer() {
         bus = getDeviceBus(address, &busName);
     }
     if (bus == nullptr) {
-        Serial.println(" NOT FOUND");
-        Serial.println("[ERROR] No device at 0x47 or 0x46 on any I2C bus; check the SEN0665 wiring");
+        SerialOut.println(" NOT FOUND");
+        SerialOut.println("[ERROR] No device at 0x47 or 0x46 on any I2C bus; check the SEN0665 wiring");
         haltWithError("Barometer not found");
     }
 
     barometer = new DFRobot_BMP58X_I2C(bus, address);
     if (!barometer->begin()) {
-        Serial.println(" FAILED");
-        Serial.print("[ERROR] Device found on "); Serial.print(busName);
-        Serial.println(" but it does not respond like a BMP585");
+        SerialOut.println(" FAILED");
+        SerialOut.print("[ERROR] Device found on "); SerialOut.print(busName);
+        SerialOut.println(" but it does not respond like a BMP585");
         haltWithError("Barometer not responding");
     }
     barometer->setMeasureMode(barometer->eNormal);
-    Serial.print(" OK (0x"); Serial.print(address, HEX);
-    Serial.print(" on "); Serial.print(busName); Serial.println(")");
+    SerialOut.print(" OK (0x"); SerialOut.print(address, HEX);
+    SerialOut.print(" on "); SerialOut.print(busName); SerialOut.println(")");
 
     // First reading as a plausibility check for the user
     readAirDensity();
-    Serial.print("        Temp: "); Serial.print(airTemperatureC, 1);
-    Serial.print(" C, air density: "); Serial.print(airDensity, 3); Serial.println(" kg/m3");
+    SerialOut.print("        Temp: "); SerialOut.print(airTemperatureC, 1);
+    SerialOut.print(" C, air density: "); SerialOut.print(airDensity, 3); SerialOut.println(" kg/m3");
 }
 
 // One raw sensor reading in Pa; returns false if it is invalid (see
@@ -544,14 +555,14 @@ void setPressureAverageSamples(int samples) {
         resetPressureAverage();
     }
 
-    Serial.print("[CONFIG] Pressure averaging set to ");
-    Serial.print(pressureAverageSamples);
-    Serial.println(" samples");
+    SerialOut.print("[CONFIG] Pressure averaging set to ");
+    SerialOut.print(pressureAverageSamples);
+    SerialOut.println(" samples");
     if (pressureAverageSamples > 1) {
         // A plain N-sample average delays the signal by (N-1)/2 samples
-        Serial.print("         Effective lag: ~");
-        Serial.print((pressureAverageSamples - 1) * UPDATE_INTERVAL_MS / 2);
-        Serial.println(" ms");
+        SerialOut.print("         Effective lag: ~");
+        SerialOut.print((pressureAverageSamples - 1) * UPDATE_INTERVAL_MS / 2);
+        SerialOut.println(" ms");
     }
 }
 
@@ -562,21 +573,21 @@ void setPressureAverageSamples(int samples) {
 void calibratePressureSensor(int numSamples) {
     stopFan();
 
-    Serial.println("\n[CALIB] Pressure Sensor Calibration");
-    Serial.println("=====================================");
-    Serial.println("        Fan stopped. Keep the tunnel still:");
-    Serial.println("        - no airflow, both pitot ports open to the room");
-    Serial.print  ("        Waiting "); Serial.print(CALIBRATION_SETTLE_S);
-    Serial.println(" s for the fan to stop and readings to settle...");
+    SerialOut.println("\n[CALIB] Pressure Sensor Calibration");
+    SerialOut.println("=====================================");
+    SerialOut.println("        Fan stopped. Keep the tunnel still:");
+    SerialOut.println("        - no airflow, both pitot ports open to the room");
+    SerialOut.print  ("        Waiting "); SerialOut.print(CALIBRATION_SETTLE_S);
+    SerialOut.println(" s for the fan to stop and readings to settle...");
     for (int i = CALIBRATION_SETTLE_S; i > 0; i--) {
-        Serial.print("        ");
-        if (i < 10) Serial.print(" ");
-        Serial.print(i);
-        Serial.println(" seconds remaining...");
+        SerialOut.print("        ");
+        if (i < 10) SerialOut.print(" ");
+        SerialOut.print(i);
+        SerialOut.println(" seconds remaining...");
         delay(1000);
     }
 
-    Serial.print("        Taking "); Serial.print(numSamples); Serial.print(" samples: ");
+    SerialOut.print("        Taking "); SerialOut.print(numSamples); SerialOut.print(" samples: ");
     double sum = 0.0;
     double sumSquares = 0.0;
     float minVal = 0.0;
@@ -590,22 +601,22 @@ void calibratePressureSensor(int numSamples) {
             if (valid == 0 || reading < minVal) minVal = reading;
             if (valid == 0 || reading > maxVal) maxVal = reading;
             valid++;
-            Serial.print(".");
+            SerialOut.print(".");
         } else {
-            Serial.print("x");
+            SerialOut.print("x");
         }
         delay(CALIB_SAMPLE_SPACING_MS);
     }
-    Serial.println();
+    SerialOut.println();
 
     // With most readings invalid the sensor is not working, and an offset
     // from the few others would make every later airspeed wrong.
     if (valid * 2 < numSamples) {
-        Serial.print("[ERROR] Only "); Serial.print(valid); Serial.print(" of ");
-        Serial.print(numSamples); Serial.println(" readings were valid: the pressure sensor is not responding");
-        Serial.print("        Offset unchanged ("); Serial.print(pressureOffset, 4);
-        Serial.println(" Pa). Check the SEN0343 wiring, then type recal");
-        Serial.println("=====================================\n");
+        SerialOut.print("[ERROR] Only "); SerialOut.print(valid); SerialOut.print(" of ");
+        SerialOut.print(numSamples); SerialOut.println(" readings were valid: the pressure sensor is not responding");
+        SerialOut.print("        Offset unchanged ("); SerialOut.print(pressureOffset, 4);
+        SerialOut.println(" Pa). Check the SEN0343 wiring, then type recal");
+        SerialOut.println("=====================================\n");
         return;
     }
 
@@ -615,15 +626,15 @@ void calibratePressureSensor(int numSamples) {
     pressureOffset = mean;
     resetPressureAverage();              // old samples used the old offset
 
-    Serial.println("\n        Calibration Results:");
+    SerialOut.println("\n        Calibration Results:");
     if (valid < numSamples) {
-        Serial.print("        Invalid readings skipped: "); Serial.println(numSamples - valid);
+        SerialOut.print("        Invalid readings skipped: "); SerialOut.println(numSamples - valid);
     }
-    Serial.print("        Min reading: "); Serial.print(minVal, 4); Serial.println(" Pa");
-    Serial.print("        Max reading: "); Serial.print(maxVal, 4); Serial.println(" Pa");
-    Serial.print("        Offset (mean): "); Serial.print(pressureOffset, 4); Serial.println(" Pa");
-    Serial.print("        Noise (std dev): "); Serial.print(sqrt(variance), 4); Serial.println(" Pa");
-    Serial.println("=====================================\n");
+    SerialOut.print("        Min reading: "); SerialOut.print(minVal, 4); SerialOut.println(" Pa");
+    SerialOut.print("        Max reading: "); SerialOut.print(maxVal, 4); SerialOut.println(" Pa");
+    SerialOut.print("        Offset (mean): "); SerialOut.print(pressureOffset, 4); SerialOut.println(" Pa");
+    SerialOut.print("        Noise (std dev): "); SerialOut.print(sqrt(variance), 4); SerialOut.println(" Pa");
+    SerialOut.println("=====================================\n");
 }
 
 // Air density from the barometer (ideal gas law, rho = p / (R T)). The
@@ -697,15 +708,14 @@ void stopFan() {
 // Stop the fan now, whatever runs: a tune is aborted (gains unchanged),
 // otherwise the PID is left idle at target 0. Used by the stop command and
 // by the safety checks. The fan is always stopped before anything is
-// printed, because printing can block (see serialHasRoom()); callers print
-// their own error message after this call for the same reason.
+// printed; callers print their own error message after this call.
 void stopAll(const char *reason) {
     if (controlMode != MODE_PID) {
         abortTuning(reason);
         return;
     }
     stopFan();
-    Serial.print("[STOP] Fan stopped, target 0 m/s ("); Serial.print(reason); Serial.println(")");
+    SerialOut.print("[STOP] Fan stopped, target 0 m/s ("); SerialOut.print(reason); SerialOut.println(")");
 }
 
 // Hand the fan to the PID without a bump. Switching QuickPID from manual to
@@ -768,25 +778,25 @@ void runPidControl() {
 // turns into PWM 255.
 bool applyGains(float newKp, float newKi, float newKd) {
     if (!isfinite(newKp) || !isfinite(newKi) || !isfinite(newKd)) {
-        Serial.println("[ERROR] PID gains must be finite numbers - gains unchanged");
+        SerialOut.println("[ERROR] PID gains must be finite numbers - gains unchanged");
         return false;
     }
     kp = clampGain("Kp", newKp, KP_MIN, KP_MAX);
     ki = clampGain("Ki", newKi, KI_MIN, KI_MAX);
     kd = clampGain("Kd", newKd, KD_MIN, KD_MAX);
     myPID.SetTunings(kp, ki, kd);
-    Serial.print("[PID] Gains set: Kp="); Serial.print(kp, 3);
-    Serial.print(" Ki="); Serial.print(ki, 3);
-    Serial.print(" Kd="); Serial.println(kd, 3);
+    SerialOut.print("[PID] Gains set: Kp="); SerialOut.print(kp, 3);
+    SerialOut.print(" Ki="); SerialOut.print(ki, 3);
+    SerialOut.print(" Kd="); SerialOut.println(kd, 3);
     return true;
 }
 
 float clampGain(const char *name, float value, float minValue, float maxValue) {
     float clamped = constrain(value, minValue, maxValue);
     if (clamped != value) {
-        Serial.print("[PID] "); Serial.print(name); Serial.print(" = "); Serial.print(value, 3);
-        Serial.print(" is outside "); Serial.print(minValue, 1); Serial.print("-");
-        Serial.print(maxValue, 1); Serial.print(", clamped to "); Serial.println(clamped, 3);
+        SerialOut.print("[PID] "); SerialOut.print(name); SerialOut.print(" = "); SerialOut.print(value, 3);
+        SerialOut.print(" is outside "); SerialOut.print(minValue, 1); SerialOut.print("-");
+        SerialOut.print(maxValue, 1); SerialOut.print(", clamped to "); SerialOut.println(clamped, 3);
     }
     return clamped;
 }
@@ -802,7 +812,7 @@ void checkPressureSensor() {
     if (invalidPressureReads < MAX_INVALID_PRESSURE_READS) return;
     if (controlMode == MODE_PID && targetAirspeed <= 0 && fanPwm == 0) return;   // already off
     stopAll("no valid pressure data");
-    Serial.println("[ERROR] Differential pressure sensor not responding");
+    SerialOut.println("[ERROR] Differential pressure sensor not responding");
 }
 
 // Once per update in PID mode and during the relay tune. The fan is driven
@@ -824,8 +834,8 @@ bool checkAirflow(bool fanDriven, const char *fanState) {
     if (noAirflowDrivenMs < NO_AIRFLOW_TIMEOUT_MS) return false;
     noAirflowDrivenMs = 0;
     stopAll("no airflow");
-    Serial.print("[ERROR] No airflow measured at "); Serial.print(fanState);
-    Serial.println(" - check the pitot tubes and the fan");
+    SerialOut.print("[ERROR] No airflow measured at "); SerialOut.print(fanState);
+    SerialOut.println(" - check the pitot tubes and the fan");
     return true;
 }
 
@@ -836,8 +846,8 @@ bool checkAirflow(bool fanDriven, const char *fanState) {
 // Auto-tunes only work with a clear airspeed signal around the target.
 bool tuneTargetOk() {
     if (targetAirspeed >= MIN_TUNE_SETPOINT) return true;
-    Serial.print("[ERROR] Set a target of at least "); Serial.print(MIN_TUNE_SETPOINT, 1);
-    Serial.println(" m/s before tuning (e.g. 10, then tune or stune)");
+    SerialOut.print("[ERROR] Set a target of at least "); SerialOut.print(MIN_TUNE_SETPOINT, 1);
+    SerialOut.println(" m/s before tuning (e.g. 10, then tune or stune)");
     return false;
 }
 
@@ -848,9 +858,9 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     // The relay switches back to LOW only above target + hysteresis, so that
     // airspeed must still be measurable.
     if (targetAirspeed + RELAY_HYSTERESIS > maxAirspeed()) {
-        Serial.print("[ERROR] Relay tune needs target + "); Serial.print(RELAY_HYSTERESIS, 1);
-        Serial.print(" m/s within the sensor limit of "); Serial.print(maxAirspeed(), 1);
-        Serial.println(" m/s - set a lower target");
+        SerialOut.print("[ERROR] Relay tune needs target + "); SerialOut.print(RELAY_HYSTERESIS, 1);
+        SerialOut.print(" m/s within the sensor limit of "); SerialOut.print(maxAirspeed(), 1);
+        SerialOut.println(" m/s - set a lower target");
         return;
     }
 
@@ -862,25 +872,25 @@ void startRelayTune(int pwmLow, int pwmHigh) {
         pwmLow = constrain(estimatedPwm - RELAY_AUTO_PWM_OFFSET,
                            RELAY_AUTO_LOW_MIN, RELAY_AUTO_LOW_MAX);
     } else if (pwmLow >= pwmHigh) {
-        Serial.println("[ERROR] PWM low must be less than PWM high (e.g. tune 40 100)");
+        SerialOut.println("[ERROR] PWM low must be less than PWM high (e.g. tune 40 100)");
         return;
     }
     relayPwmLow = pwmLow;
     relayPwmHigh = pwmHigh;
 
-    Serial.println("\n=====================================");
-    Serial.println("[RELAY] AUTO-TUNE STARTING");
-    Serial.println("=====================================");
-    Serial.print("[RELAY] Target airspeed: "); Serial.print(targetAirspeed, 2); Serial.println(" m/s");
-    Serial.println("[RELAY] Method: Astrom-Hagglund relay, Pessen integral rule");
-    Serial.print("[RELAY] PWM range: "); Serial.print(relayPwmLow);
-    Serial.print(" - "); Serial.print(relayPwmHigh);
-    Serial.println(autoRange ? " (estimated; if tuning fails try e.g. tune 40 100)" : " (manual)");
-    Serial.print("[RELAY] Hysteresis: +/-"); Serial.print(RELAY_HYSTERESIS, 2);
-    Serial.print(" m/s, cycles needed: "); Serial.print(REQUIRED_CYCLES);
-    Serial.print(", timeout: "); Serial.print(RELAY_TIMEOUT_MS / 1000); Serial.println(" s");
-    Serial.println("[RELAY] Type 0 or stop to abort");
-    Serial.println("=====================================");
+    SerialOut.println("\n=====================================");
+    SerialOut.println("[RELAY] AUTO-TUNE STARTING");
+    SerialOut.println("=====================================");
+    SerialOut.print("[RELAY] Target airspeed: "); SerialOut.print(targetAirspeed, 2); SerialOut.println(" m/s");
+    SerialOut.println("[RELAY] Method: Astrom-Hagglund relay, Pessen integral rule");
+    SerialOut.print("[RELAY] PWM range: "); SerialOut.print(relayPwmLow);
+    SerialOut.print(" - "); SerialOut.print(relayPwmHigh);
+    SerialOut.println(autoRange ? " (estimated; if tuning fails try e.g. tune 40 100)" : " (manual)");
+    SerialOut.print("[RELAY] Hysteresis: +/-"); SerialOut.print(RELAY_HYSTERESIS, 2);
+    SerialOut.print(" m/s, cycles needed: "); SerialOut.print(REQUIRED_CYCLES);
+    SerialOut.print(", timeout: "); SerialOut.print(RELAY_TIMEOUT_MS / 1000); SerialOut.println(" s");
+    SerialOut.println("[RELAY] Type 0 or stop to abort");
+    SerialOut.println("=====================================");
 
     tuneStartTime = millis();
     noAirflowDrivenMs = 0;
@@ -922,26 +932,26 @@ void runRelayTune() {
 
     if (millis() - tuneStartTime > RELAY_TIMEOUT_MS) {
         abortTuning("relay tune timeout");   // fan off before the advice below
-        Serial.print("[RELAY] Not enough oscillation: ");
-        Serial.print(relayCycles); Serial.print(" of "); Serial.print(REQUIRED_CYCLES);
-        Serial.println(" valid cycles");
-        Serial.println("        - Check fan power and the PWM wiring");
-        Serial.println("        - Make sure the target lies between the speeds of the two PWM levels");
-        Serial.println("        - Try a manual range, e.g. tune 40 100");
+        SerialOut.print("[RELAY] Not enough oscillation: ");
+        SerialOut.print(relayCycles); SerialOut.print(" of "); SerialOut.print(REQUIRED_CYCLES);
+        SerialOut.println(" valid cycles");
+        SerialOut.println("        - Check fan power and the PWM wiring");
+        SerialOut.println("        - Make sure the target lies between the speeds of the two PWM levels");
+        SerialOut.println("        - Try a manual range, e.g. tune 40 100");
     }
 }
 
 // Apply the low or high relay level. The status line is optional and is
-// skipped if it would block (see serialHasRoom()).
+// skipped if it does not fit completely (see serialHasRoom()).
 void setRelay(bool high) {
     relayHigh = high;
     int pwm = high ? relayPwmHigh : relayPwmLow;
     pidOutput = pwm;
     setFanPwm(pwm);
     if (!serialHasRoom(STATUS_LINE_MAX_LENGTH)) return;
-    Serial.print("[RELAY] Switched to "); Serial.print(high ? "HIGH" : "LOW");
-    Serial.print(" (PWM "); Serial.print(pwm);
-    Serial.print(") at V="); Serial.print(currentAirspeed, 2); Serial.println(" m/s");
+    SerialOut.print("[RELAY] Switched to "); SerialOut.print(high ? "HIGH" : "LOW");
+    SerialOut.print(" (PWM "); SerialOut.print(pwm);
+    SerialOut.print(") at V="); SerialOut.print(currentAirspeed, 2); SerialOut.println(" m/s");
 }
 
 // Called at every HIGH->LOW switch: one full oscillation cycle has ended.
@@ -955,9 +965,9 @@ void recordRelayCycle() {
             sumPeriodsS += periodMs / 1000.0;
             sumAmplitudes += amplitude;
             if (serialHasRoom(STATUS_LINE_MAX_LENGTH)) {   // optional, see setRelay()
-                Serial.print("[RELAY] Cycle "); Serial.print(relayCycles);
-                Serial.print(" | Period: "); Serial.print(periodMs / 1000.0, 1); Serial.print(" s");
-                Serial.print(" | Amplitude: "); Serial.print(amplitude, 2); Serial.println(" m/s");
+                SerialOut.print("[RELAY] Cycle "); SerialOut.print(relayCycles);
+                SerialOut.print(" | Period: "); SerialOut.print(periodMs / 1000.0, 1); SerialOut.print(" s");
+                SerialOut.print(" | Amplitude: "); SerialOut.print(amplitude, 2); SerialOut.println(" m/s");
             }
         }
     }
@@ -982,18 +992,18 @@ void completeRelayTune() {
     float newKi = 1.75 * ku / tu;        // Kp / Ti
     float newKd = 0.105 * ku * tu;       // Kp * Td
 
-    Serial.println("\n=====================================");
-    Serial.println("[RELAY] AUTO-TUNE COMPLETE");
-    Serial.println("=====================================");
+    SerialOut.println("\n=====================================");
+    SerialOut.println("[RELAY] AUTO-TUNE COMPLETE");
+    SerialOut.println("=====================================");
     // Relay estimates: the hysteresis band shifts the oscillation away from
     // the true ultimate point, so these are approximations of Ku and Tu.
-    Serial.print("        Period Tu (relay estimate): "); Serial.print(tu, 2); Serial.println(" s");
-    Serial.print("        Amplitude: "); Serial.print(amplitude, 2); Serial.println(" m/s");
-    Serial.print("        Ultimate gain Ku (relay estimate): "); Serial.print(ku, 3);
-    Serial.println(" PWM per m/s");
-    Serial.print("        Pessen integral rule: Kp="); Serial.print(newKp, 3);
-    Serial.print(" Ki="); Serial.print(newKi, 3);
-    Serial.print(" Kd="); Serial.println(newKd, 3);
+    SerialOut.print("        Period Tu (relay estimate): "); SerialOut.print(tu, 2); SerialOut.println(" s");
+    SerialOut.print("        Amplitude: "); SerialOut.print(amplitude, 2); SerialOut.println(" m/s");
+    SerialOut.print("        Ultimate gain Ku (relay estimate): "); SerialOut.print(ku, 3);
+    SerialOut.println(" PWM per m/s");
+    SerialOut.print("        Pessen integral rule: Kp="); SerialOut.print(newKp, 3);
+    SerialOut.print(" Ki="); SerialOut.print(newKi, 3);
+    SerialOut.print(" Kd="); SerialOut.println(newKd, 3);
     // The tune always ends at a HIGH->LOW switch, i.e. at the low relay PWM,
     // which is below what the target needs, so the airspeed would dip after
     // the hand-over. Start the PID from the mean relay output instead (the
@@ -1019,13 +1029,12 @@ void startSTune() {
     if (sTuner->startTuning(targetAirspeed, MAX_AIRSPEED, 255.0, outputStart, outputStep,
                             STUNE_TEST_TIME_S, STUNE_SETTLE_TIME_S, STUNE_SAMPLES)) {
         controlMode = MODE_STUNE;
+        setFanPwm((int)round(pidOutput));   // start PWM now: the settle time runs from here
     }
 }
 
 // sTune step test, called on every loop() pass. sTune sets pidOutput through
 // the pointer it was given; setFanPwm() only writes when the value changes.
-// When the test ends, the wrapper's report is printed only after the fan has
-// a safe state (see printReport()).
 void runSTune() {
     STunePIDTuner::TuningStatus status = sTuner->update();
 
@@ -1053,15 +1062,14 @@ void runSTune() {
 
 // End a running relay tune or sTune without applying any gains (user abort,
 // timeout, safety check or tuner error): fan off, target 0, PID
-// re-initialised. The fan is stopped before anything is printed, because
-// printing can block (see serialHasRoom()).
+// re-initialised. The fan is stopped before anything is printed.
 void abortTuning(const char *reason) {
     bool wasSTune = (controlMode == MODE_STUNE);
     controlMode = MODE_PID;
     stopFan();
-    Serial.print("\n[TUNE] Tuning aborted (");
-    Serial.print(reason);
-    Serial.println(") - fan stopped, target 0 m/s, gains unchanged\n");
+    SerialOut.print("\n[TUNE] Tuning aborted (");
+    SerialOut.print(reason);
+    SerialOut.println(") - fan stopped, target 0 m/s, gains unchanged\n");
     if (wasSTune) {
         sTuner->printReport();           // sTune's own details (model, timeout)
         sTuner->reset();
@@ -1079,11 +1087,11 @@ void finishTuning(float newKp, float newKi, float newKd) {
     controlMode = MODE_PID;
     pidOutput = fanPwm;                  // PWM the fan runs at now
     pidBumplessStart();
-    Serial.print("[TUNE] PID running at target "); Serial.print(targetAirspeed, 2);
-    Serial.println(" m/s with the new gains");
-    Serial.print("[TUNE] To reuse these gains later: tune ");
-    Serial.print(kp, 3); Serial.print(" "); Serial.print(ki, 3); Serial.print(" "); Serial.println(kd, 3);
-    Serial.println("=====================================\n");
+    SerialOut.print("[TUNE] PID running at target "); SerialOut.print(targetAirspeed, 2);
+    SerialOut.println(" m/s with the new gains");
+    SerialOut.print("[TUNE] To reuse these gains later: tune ");
+    SerialOut.print(kp, 3); SerialOut.print(" "); SerialOut.print(ki, 3); SerialOut.print(" "); SerialOut.println(kd, 3);
+    SerialOut.println("=====================================\n");
 }
 
 // ===========================================================================
@@ -1119,9 +1127,9 @@ void pollSerialCommands() {
 // Run the collected line (if any) and start a new one.
 void endSerialLine() {
     if (serialLineTooLong) {
-        Serial.print("[ERROR] Line too long (max ");
-        Serial.print(SERIAL_LINE_SIZE - 1);
-        Serial.println(" characters) - ignored");
+        SerialOut.print("[ERROR] Line too long (max ");
+        SerialOut.print(SERIAL_LINE_SIZE - 1);
+        SerialOut.println(" characters) - ignored");
     } else if (serialLineLength > 0) {
         serialLine[serialLineLength] = '\0';
         handleCommand(serialLine);
@@ -1147,13 +1155,13 @@ void handleCommand(char *line) {
         return;
     }
     if (count > MAX_COMMAND_WORDS) {
-        Serial.println("[ERROR] Too many values - type 'help' for the command list");
+        SerialOut.println("[ERROR] Too many values - type 'help' for the command list");
         return;
     }
 
     // While a tuner drives the fan, nothing else may change its state.
     if (controlMode != MODE_PID) {
-        Serial.println("[BUSY] Tuning in progress - type 0 or stop to abort");
+        SerialOut.println("[BUSY] Tuning in progress - type 0 or stop to abort");
         return;
     }
 
@@ -1168,13 +1176,13 @@ void handleCommand(char *line) {
                 parseWholeNumber(words[2], 1, 255, pwmHigh)) {
                 startRelayTune(pwmLow, pwmHigh);
             } else {
-                Serial.println("[ERROR] PWM values must be whole numbers 1-255");
-                Serial.println("        Usage: tune <low> <high>   Example: tune 40 100");
+                SerialOut.println("[ERROR] PWM values must be whole numbers 1-255");
+                SerialOut.println("        Usage: tune <low> <high>   Example: tune 40 100");
             }
         } else if (count == 4) {
             setManualGains(words[1], words[2], words[3]);
         } else {
-            Serial.println("[ERROR] Usage: tune | tune <low> <high> | tune <Kp> <Ki> <Kd>");
+            SerialOut.println("[ERROR] Usage: tune | tune <low> <high> | tune <Kp> <Ki> <Kd>");
         }
     } else if (wordIs(cmd, "stune") && count == 1) {
         startSTune();
@@ -1182,9 +1190,9 @@ void handleCommand(char *line) {
         int samples = DEFAULT_CALIB_SAMPLES;
         if (count > 2 || (count == 2 &&
             !parseWholeNumber(words[1], MIN_CALIB_SAMPLES, MAX_CALIB_SAMPLES, samples))) {
-            Serial.print("[ERROR] Calibration samples must be between ");
-            Serial.print(MIN_CALIB_SAMPLES); Serial.print(" and ");
-            Serial.println(MAX_CALIB_SAMPLES);
+            SerialOut.print("[ERROR] Calibration samples must be between ");
+            SerialOut.print(MIN_CALIB_SAMPLES); SerialOut.print(" and ");
+            SerialOut.println(MAX_CALIB_SAMPLES);
             return;
         }
         calibratePressureSensor(samples);
@@ -1193,16 +1201,16 @@ void handleCommand(char *line) {
         if (count == 2 && parseWholeNumber(words[1], MIN_AVG_SAMPLES, MAX_AVG_SAMPLES, samples)) {
             setPressureAverageSamples(samples);
         } else {
-            Serial.print("[ERROR] Averaging samples must be between ");
-            Serial.print(MIN_AVG_SAMPLES); Serial.print(" and ");
-            Serial.println(MAX_AVG_SAMPLES);
+            SerialOut.print("[ERROR] Averaging samples must be between ");
+            SerialOut.print(MIN_AVG_SAMPLES); SerialOut.print(" and ");
+            SerialOut.println(MAX_AVG_SAMPLES);
         }
     } else if (isNumber && count == 1) {
         setTargetAirspeed(number);
     } else {
-        Serial.print("[ERROR] Unknown command or wrong number of values: '");
-        Serial.print(cmd);
-        Serial.println("' - type 'help' for the command list");
+        SerialOut.print("[ERROR] Unknown command or wrong number of values: '");
+        SerialOut.print(cmd);
+        SerialOut.println("' - type 'help' for the command list");
     }
 }
 
@@ -1265,18 +1273,18 @@ bool parseWholeNumber(const char *text, int minValue, int maxValue, int &value) 
 
 void setTargetAirspeed(float target) {
     if (target < 0) {
-        Serial.println("[ERROR] Negative airspeed not allowed");
+        SerialOut.println("[ERROR] Negative airspeed not allowed");
         return;
     }
     float limit = maxAirspeed();
     if (target > limit) {
-        Serial.print("[WARN] Capping at "); Serial.print(limit, 2);
-        Serial.println(" m/s (sensor limit in the present air)");
+        SerialOut.print("[WARN] Capping at "); SerialOut.print(limit, 2);
+        SerialOut.println(" m/s (sensor limit in the present air)");
         target = limit;
     }
     // Only the setpoint changes; the PID continues smoothly from the present PWM.
     targetAirspeed = target;
-    Serial.print("[SERIAL] New target: "); Serial.print(targetAirspeed, 2); Serial.println(" m/s");
+    SerialOut.print("[SERIAL] New target: "); SerialOut.print(targetAirspeed, 2); SerialOut.println(" m/s");
 }
 
 // tune <Kp> <Ki> <Kd>: set the PID gains by hand.
@@ -1284,8 +1292,8 @@ void setManualGains(const char *kpText, const char *kiText, const char *kdText) 
     float newKp, newKi, newKd;
     if (!parseDecimal(kpText, newKp) || !parseDecimal(kiText, newKi) ||
         !parseDecimal(kdText, newKd) || newKp <= 0 || newKi < 0 || newKd < 0) {
-        Serial.println("[ERROR] Invalid PID values");
-        Serial.println("        Usage: tune <Kp> <Ki> <Kd>   Example: tune 20 8 12");
+        SerialOut.println("[ERROR] Invalid PID values");
+        SerialOut.println("        Usage: tune <Kp> <Ki> <Kd>   Example: tune 20 8 12");
         return;
     }
     applyGains(newKp, newKi, newKd);
@@ -1296,43 +1304,43 @@ void setManualGains(const char *kpText, const char *kiText, const char *kdText) 
 // ===========================================================================
 
 void printBanner() {
-    Serial.println("\n\n=====================================");
-    Serial.print  ("   EDU Wind Tunnel PID Controller v"); Serial.println(FIRMWARE_VERSION);
-    Serial.print  ("   Board: "); Serial.println(BOARD_NAME);
-    Serial.println("   Sensors: DFRobot SEN0343 (LWLP5000) + SEN0665 (BMP585)");
-    Serial.print  ("   Build: "); Serial.print(__DATE__); Serial.print(" "); Serial.println(__TIME__);
-    Serial.println("=====================================");
+    SerialOut.println("\n\n=====================================");
+    SerialOut.print  ("   EDU Wind Tunnel PID Controller v"); SerialOut.println(FIRMWARE_VERSION);
+    SerialOut.print  ("   Board: "); SerialOut.println(BOARD_NAME);
+    SerialOut.println("   Sensors: DFRobot SEN0343 (LWLP5000) + SEN0665 (BMP585)");
+    SerialOut.print  ("   Build: "); SerialOut.print(__DATE__); SerialOut.print(" "); SerialOut.println(__TIME__);
+    SerialOut.println("=====================================");
 }
 
 void printHelp() {
-    Serial.println("COMMANDS (type a line and press Enter):");
-    Serial.print  ("  <m/s>                Set target airspeed, 0 to "); Serial.print(maxAirspeed(), 1);
-    Serial.println(" (e.g. 10)");
-    Serial.println("  0 or stop            Stop the fan now (also aborts a running tune)");
-    Serial.println("  tune                 Relay auto-tune, automatic PWM range");
-    Serial.println("  tune <low> <high>    Relay auto-tune, PWM range 1-255 (e.g. tune 40 100)");
-    Serial.println("  tune <Kp> <Ki> <Kd>  Set PID gains (e.g. tune 20 8 12)");
-    Serial.print  ("                       Ranges: Kp "); Serial.print(KP_MIN, 0); Serial.print("-");
-    Serial.print(KP_MAX, 0); Serial.print(", Ki "); Serial.print(KI_MIN, 1); Serial.print("-");
-    Serial.print(KI_MAX, 0); Serial.print(", Kd "); Serial.print(KD_MIN, 1); Serial.print("-");
-    Serial.println(KD_MAX, 0);
-    Serial.println("  stune                sTune step-response auto-tune");
-    Serial.print  ("  recal [N]            Stop the fan and re-zero the pressure sensor (N = ");
-    Serial.print(MIN_CALIB_SAMPLES); Serial.print("-"); Serial.print(MAX_CALIB_SAMPLES);
-    Serial.println(" samples)");
-    Serial.print  ("  avg <N>              Pressure moving-average length (");
-    Serial.print(MIN_AVG_SAMPLES); Serial.print("-"); Serial.print(MAX_AVG_SAMPLES);
-    Serial.println(")");
-    Serial.println("  help                 Show this list");
-    Serial.print  ("Auto-tunes need a target of at least "); Serial.print(MIN_TUNE_SETPOINT, 1);
-    Serial.println(" m/s. During a tune only 0 or stop is accepted.");
-    Serial.println("DATA: time | V airspeed | SP target | PWM 0-255 | P pitot Pa | Temp C | Err SP-V");
+    SerialOut.println("COMMANDS (type a line and press Enter):");
+    SerialOut.print  ("  <m/s>                Set target airspeed, 0 to "); SerialOut.print(maxAirspeed(), 1);
+    SerialOut.println(" (e.g. 10)");
+    SerialOut.println("  0 or stop            Stop the fan now (also aborts a running tune)");
+    SerialOut.println("  tune                 Relay auto-tune, automatic PWM range");
+    SerialOut.println("  tune <low> <high>    Relay auto-tune, PWM range 1-255 (e.g. tune 40 100)");
+    SerialOut.println("  tune <Kp> <Ki> <Kd>  Set PID gains (e.g. tune 20 8 12)");
+    SerialOut.print  ("                       Ranges: Kp "); SerialOut.print(KP_MIN, 0); SerialOut.print("-");
+    SerialOut.print(KP_MAX, 0); SerialOut.print(", Ki "); SerialOut.print(KI_MIN, 1); SerialOut.print("-");
+    SerialOut.print(KI_MAX, 0); SerialOut.print(", Kd "); SerialOut.print(KD_MIN, 1); SerialOut.print("-");
+    SerialOut.println(KD_MAX, 0);
+    SerialOut.println("  stune                sTune step-response auto-tune");
+    SerialOut.print  ("  recal [N]            Stop the fan and re-zero the pressure sensor (N = ");
+    SerialOut.print(MIN_CALIB_SAMPLES); SerialOut.print("-"); SerialOut.print(MAX_CALIB_SAMPLES);
+    SerialOut.println(" samples)");
+    SerialOut.print  ("  avg <N>              Pressure moving-average length (");
+    SerialOut.print(MIN_AVG_SAMPLES); SerialOut.print("-"); SerialOut.print(MAX_AVG_SAMPLES);
+    SerialOut.println(")");
+    SerialOut.println("  help                 Show this list");
+    SerialOut.print  ("Auto-tunes need a target of at least "); SerialOut.print(MIN_TUNE_SETPOINT, 1);
+    SerialOut.println(" m/s. During a tune only 0 or stop is accepted.");
+    SerialOut.println("DATA: time | V airspeed | SP target | PWM 0-255 | P pitot Pa | Temp C | Err SP-V");
 }
 
 // One line per update interval (format in the header comment). The relay
 // tune shows its own elapsed time and cycle count; sTune shows its phase.
 void printDataLine(unsigned long now, float pressure) {
-    // A line that would block (see serialHasRoom()) is skipped and counted;
+    // A line that does not fit completely (see serialHasRoom()) is skipped and counted;
     // the next line that fits reports the count.
     if (!serialHasRoom(DATA_LINE_MAX_LENGTH)) {
         skippedDataLines++;
@@ -1340,33 +1348,33 @@ void printDataLine(unsigned long now, float pressure) {
     }
     dataLineCount++;
     if (controlMode == MODE_STUNE) {
-        Serial.print("[sTune] "); Serial.print(sTuner->getStatusString()); Serial.print(" | ");
+        SerialOut.print("[sTune] "); SerialOut.print(sTuner->getStatusString()); SerialOut.print(" | ");
     } else if (controlMode == MODE_RELAY_TUNE) {
         // millis(), not now: a tune started by a command in this pass began after now
-        Serial.print("[TUNE] "); Serial.print((millis() - tuneStartTime) / 1000); Serial.print("s | ");
-        Serial.print("Cycle:"); Serial.print(relayCycles); Serial.print(" | ");
+        SerialOut.print("[TUNE] "); SerialOut.print((millis() - tuneStartTime) / 1000); SerialOut.print("s | ");
+        SerialOut.print("Cycle:"); SerialOut.print(relayCycles); SerialOut.print(" | ");
     } else {
-        Serial.print((now - runStartTime) / 1000); Serial.print("s | ");
+        SerialOut.print((now - runStartTime) / 1000); SerialOut.print("s | ");
     }
-    Serial.print("V:"); Serial.print(currentAirspeed, 2);
-    Serial.print(" | SP:"); Serial.print(targetAirspeed, 2);
-    Serial.print(" | PWM:"); Serial.print(fanPwm);
-    Serial.print(" | P:"); Serial.print(pressure, 2);
-    Serial.print(" | Temp:"); Serial.print(airTemperatureC, 1);
-    Serial.print(" | Err:"); Serial.print(targetAirspeed - currentAirspeed, 2);
+    SerialOut.print("V:"); SerialOut.print(currentAirspeed, 2);
+    SerialOut.print(" | SP:"); SerialOut.print(targetAirspeed, 2);
+    SerialOut.print(" | PWM:"); SerialOut.print(fanPwm);
+    SerialOut.print(" | P:"); SerialOut.print(pressure, 2);
+    SerialOut.print(" | Temp:"); SerialOut.print(airTemperatureC, 1);
+    SerialOut.print(" | Err:"); SerialOut.print(targetAirspeed - currentAirspeed, 2);
 
     // Every 20th line in PID mode: the active gains and averaging length
     if (dataLineCount % 20 == 0 && controlMode == MODE_PID) {
-        Serial.print(" | Kp:"); Serial.print(kp, 1);
-        Serial.print(" Ki:"); Serial.print(ki, 1);
-        Serial.print(" Kd:"); Serial.print(kd, 1);
-        Serial.print(" Avg:"); Serial.print(pressureAverageSamples);
+        SerialOut.print(" | Kp:"); SerialOut.print(kp, 1);
+        SerialOut.print(" Ki:"); SerialOut.print(ki, 1);
+        SerialOut.print(" Kd:"); SerialOut.print(kd, 1);
+        SerialOut.print(" Avg:"); SerialOut.print(pressureAverageSamples);
     }
     if (skippedDataLines > 0) {
-        Serial.print(" | Skipped:"); Serial.print(skippedDataLines);
+        SerialOut.print(" | Skipped:"); SerialOut.print(skippedDataLines);
         skippedDataLines = 0;
     }
-    Serial.println();
+    SerialOut.println();
 }
 
 // The PID assumes one Compute() per update interval. If a pass takes longer
@@ -1376,9 +1384,9 @@ void warnIfSlowPass(unsigned long passMs) {
     if (passMs <= UPDATE_INTERVAL_MS) return;
     if (millis() - lastSlowPassWarning < SLOW_PASS_WARNING_INTERVAL_MS) return;
     lastSlowPassWarning = millis();
-    Serial.print("[WARN] Update pass took "); Serial.print(passMs);
-    Serial.print(" ms (interval "); Serial.print(UPDATE_INTERVAL_MS);
-    Serial.println(" ms) - control runs slower than configured");
+    SerialOut.print("[WARN] Update pass took "); SerialOut.print(passMs);
+    SerialOut.print(" ms (interval "); SerialOut.print(UPDATE_INTERVAL_MS);
+    SerialOut.println(" ms) - control runs slower than configured");
 }
 
 // Fatal error: keep the fan off and stop here for good. Blinking the status
@@ -1387,9 +1395,9 @@ void warnIfSlowPass(unsigned long passMs) {
 // data would mean running it without control.
 void haltWithError(const char *msg) {
     setFanPwm(0);
-    Serial.print("[FATAL] ");
-    Serial.println(msg);
-    Serial.println("[FATAL] System halted with the fan off. Fix the fault and reset the board.");
+    SerialOut.print("[FATAL] ");
+    SerialOut.println(msg);
+    SerialOut.println("[FATAL] System halted with the fan off. Fix the fault and reset the board.");
     bool ledOn = false;
     while (true) {
         if (STATUS_LED_PIN >= 0) {
