@@ -31,9 +31,9 @@ public:
      * Constructor
      * @param input Pointer to process variable (measured airspeed)
      * @param output Pointer to control output (PWM value)
-     * @param tuningMethod sTune tuning method (default: NoOvershoot_PID)
+     * @param tuningMethod sTune tuning method (e.g. sTune::Mixed_PID)
      */
-    STunePIDTuner(float *input, float *output, sTune::TuningMethod tuningMethod = sTune::NoOvershoot_PID);
+    STunePIDTuner(float *input, float *output, sTune::TuningMethod tuningMethod);
 
     /**
      * Destructor
@@ -58,22 +58,15 @@ public:
      * @param samples Number of samples for test
      * @return true if configuration successful
      */
-    bool startTuning(float setpoint, float inputSpan = 30.0, float outputSpan = 255.0,
-                     float outputStart = 0.0, float outputStep = 100.0,
-                     uint32_t testTimeSec = 60, uint32_t settleTimeSec = 5,
-                     uint16_t samples = 300);
+    bool startTuning(float setpoint, float inputSpan, float outputSpan,
+                     float outputStart, float outputStep,
+                     uint32_t testTimeSec, uint32_t settleTimeSec, uint16_t samples);
 
     /**
      * Update the tuning process - call this in main loop during tuning
      * @return Current tuning status
      */
     TuningStatus update();
-
-    /**
-     * Check if tuning is finished
-     * @return true if tuning completed (success or timeout/error)
-     */
-    bool isFinished();
 
     /**
      * Get the tuned PID gains, converted to QuickPID's parallel form in raw
@@ -91,12 +84,6 @@ public:
     void reset();
 
     /**
-     * Get current tuning status
-     * @return Current status
-     */
-    TuningStatus getStatus() const { return _status; }
-
-    /**
      * Get status as string for debugging
      * @return Status string
      */
@@ -110,12 +97,6 @@ public:
      * @param limit Maximum safe value (0 = inputSpan of the run)
      */
     void setEmergencyStop(float limit);
-
-    /**
-     * Set the tuning method
-     * @param method sTune tuning method
-     */
-    void setTuningMethod(sTune::TuningMethod method);
 
     /**
      * Get the current tuning method name as string
@@ -134,7 +115,8 @@ public:
 
     /**
      * Get process characteristics as sTune reports them: the process gain is
-     * normalised to the spans (% output per % input), times in seconds
+     * normalised to the spans (% input per % output, sTune.cpp line 194),
+     * times in seconds
      */
     float getProcessGain() const;
     float getDeadTime() const;
@@ -142,7 +124,7 @@ public:
 
 private:
     // sTune 2.4.0 leaves members uninitialised (pvInst is compared with the
-    // emergency stop on the first Run(); _outputStart is written to *output)
+    // emergency stop on the first Run(); its _outputStart is written to *output)
     // and never clears its emergency-stop latch. So each run gets a new sTune
     // object built in zero-filled storage inside this wrapper (no separate
     // heap block).
@@ -157,19 +139,15 @@ private:
     float _setpoint;            // Target setpoint for tuning
     TuningStatus _status;       // Current tuning status
     unsigned long _startTime;   // Tuning start time
-    unsigned long _timeout;     // Timeout in milliseconds
+    unsigned long _timeout;     // Safety net: settle + test time + 50 %, in ms
     float _kp, _ki, _kd;        // Tuned gains
     bool _gainsValid;           // Flag indicating if gains are valid
     sTune::TuningMethod _tuningMethod;  // Selected tuning method
     
-    // Configuration storage
+    // Configuration of the present run (set by startTuning())
     float _inputSpan;
     float _outputSpan;
-    float _outputStart;
-    float _outputStep;
-    uint32_t _testTimeSec;
     uint32_t _settleTimeSec;
-    uint16_t _samples;
     float _eStop;               // emergency stop limit (0 = inputSpan of the run)
     float _eStopInput;          // input that tripped the emergency stop
 };

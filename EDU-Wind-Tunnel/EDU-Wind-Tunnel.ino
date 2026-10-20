@@ -66,12 +66,16 @@ const float DEFAULT_KP = 25.0, DEFAULT_KI = 10.0, DEFAULT_KD = 15.0;
 const float KP_MIN = 1.0, KP_MAX = 100.0;
 const float KI_MIN = 0.1, KI_MAX = 50.0;
 const float KD_MIN = 0.1, KD_MAX = 50.0;
-// Largest PWM change per update; keeps the fan (and its supply) from
-// jumping between full and zero power.
+// Largest PWM change per update in PID mode (and at the hand-over after a
+// relay tune); keeps the fan (and its supply) from jumping between full and
+// zero power. Stop, the relay levels and the sTune steps bypass it.
 const int MAX_PWM_CHANGE_PER_CYCLE = 25;
 
 // Auto-tuning
 const float MIN_TUNE_SETPOINT = 2.0;     // m/s; below this the pitot signal is too small
+// Rough fan sensitivity, PWM per m/s of target. Both tuners use it to guess
+// their PWM levels before they have measured the fan.
+const float FAN_PWM_PER_MPS_ESTIMATE = 8.0;
 
 // Relay auto-tune (Astrom-Hagglund): switch the PWM between a low and a high
 // level whenever the airspeed leaves a band around the target. The resulting
@@ -81,6 +85,12 @@ const int REQUIRED_CYCLES = 3;                    // valid cycles to average
 const float MIN_CYCLE_AMPLITUDE = 0.5;            // m/s; smaller swings are noise
 const unsigned long MIN_CYCLE_PERIOD_MS = 2000;   // shorter "cycles" are noise
 const unsigned long RELAY_TIMEOUT_MS = 120000;
+// "tune" without a PWM range: the relay levels are the estimated PWM for the
+// target -/+ RELAY_AUTO_PWM_OFFSET, kept within these limits. If the estimate
+// does not suit your fan, give the range by hand (tune <low> <high>).
+const int RELAY_AUTO_PWM_OFFSET = 20;
+const int RELAY_AUTO_LOW_MIN = 20, RELAY_AUTO_LOW_MAX = 150;
+const int RELAY_AUTO_HIGH_MIN = 40, RELAY_AUTO_HIGH_MAX = 245;
 
 // sTune auto-tune (open-loop step test, inflection point method). Methods:
 //   sTune::ZN_PID          Ziegler-Nichols (fast, moderate overshoot)
@@ -96,7 +106,11 @@ const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
 // within -51..+171 % (60 s: +309..+1071 %) with the same closed-loop result;
 // 10 s underestimated slow fans by up to 79 % and the tuned loop oscillated.
 const uint32_t STUNE_TEST_TIME_S = 15;
-const uint16_t STUNE_SAMPLES = 75;       // 15 s / 75 = one sample per 200 ms
+// One sample per update interval: a sample is a fresh pressure reading.
+const uint16_t STUNE_SAMPLES = STUNE_TEST_TIME_S * 1000 / UPDATE_INTERVAL_MS;
+// Step PWM: the estimated PWM for the target, kept in a range that gives a
+// clear response without running the fan flat out.
+const float STUNE_STEP_PWM_MIN = 60.0, STUNE_STEP_PWM_MAX = 200.0;
 // The step goes from STUNE_START_FRACTION x step PWM to the step PWM. The fan
 // holds the start PWM for STUNE_SETTLE_TIME_S first, long enough to reach it
 // from any earlier state (also from full speed: fans run down slowly).
@@ -125,6 +139,19 @@ const int NO_AIRFLOW_PWM = 250;                      // "full fan power" in PID 
 const float NO_AIRFLOW_SPEED = 1.0;                  // m/s
 const unsigned long NO_AIRFLOW_TIMEOUT_MS = 15000;   // driven time without airflow
 
+// Serial input (one line is collected without blocking loop())
+const size_t SERIAL_LINE_SIZE = 64;      // buffer size incl. the terminating '\0'
+const int MAX_COMMAND_WORDS = 4;         // longest command: tune <Kp> <Ki> <Kd>
+// Until the first CR or LF arrives, a line also ends after this long without
+// a new character, so the serial monitor's "No line ending" setting works too.
+const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
+
+// Serial output. Routine lines are skipped while they would block (see
+// serialHasRoom()), so they need a known maximum length.
+const int DATA_LINE_MAX_LENGTH = 128;    // longest data line, with all suffixes
+const int STATUS_LINE_MAX_LENGTH = 64;   // longest relay switch or cycle line
+const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;   // at most one per 10 s
+
 // ===========================================================================
 // State
 // ===========================================================================
@@ -146,12 +173,12 @@ float airTemperatureC = 15.0;
 // Only one mode is active at a time, so tuning and PID never fight over PWM.
 enum ControlMode { MODE_PID, MODE_RELAY_TUNE, MODE_STUNE };
 ControlMode controlMode = MODE_PID;
-float currentAirSpeed = 0;               // PID input, m/s
-float desiredAirSpeed = 0;               // PID setpoint, m/s
-float currPWM = 0;                       // PID (or tuner) output, 0-255
+float currentAirspeed = 0;               // PID input, m/s
+float targetAirspeed = 0;                // PID setpoint, m/s
+float pidOutput = 0;                     // PID output (the tuners write it too), 0-255
 int fanPwm = -1;                         // PWM last written to the fan (-1 = never)
 float kp = DEFAULT_KP, ki = DEFAULT_KI, kd = DEFAULT_KD;
-QuickPID myPID(&currentAirSpeed, &currPWM, &desiredAirSpeed);
+QuickPID myPID(&currentAirspeed, &pidOutput, &targetAirspeed);
 unsigned long noAirflowDrivenMs = 0;     // driven time since airflow was last seen
 
 // --- Relay auto-tune ---
@@ -175,18 +202,9 @@ unsigned long lastUpdate = 0;
 unsigned long runStartTime = 0;          // for the time stamp of the data line
 unsigned long dataLineCount = 0;
 unsigned long lastSlowPassWarning = 0;
-const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;
-// Routine output is skipped while it would block (see serialHasRoom())
-const int DATA_LINE_MAX_LENGTH = 128;    // longest data line, with all suffixes
-const int STATUS_LINE_MAX_LENGTH = 64;   // longest relay switch or cycle line
-unsigned long skippedDataLines = 0;
+unsigned long skippedDataLines = 0;      // since the last printed data line
 
-// --- Serial command input (one line is collected without blocking loop()) ---
-const size_t SERIAL_LINE_SIZE = 64;      // buffer size incl. the terminating '\0'
-const int MAX_COMMAND_WORDS = 4;         // longest command: tune <Kp> <Ki> <Kd>
-// Until the first CR or LF arrives, a line also ends after this long without
-// a new character, so the serial monitor's "No line ending" setting works too.
-const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
+// --- Serial command input ---
 char serialLine[SERIAL_LINE_SIZE];
 size_t serialLineLength = 0;
 bool serialLineTooLong = false;
@@ -332,7 +350,7 @@ void setup() {
     Serial.print("        PWM rate limit: +/-"); Serial.print(MAX_PWM_CHANGE_PER_CYCLE);
     Serial.println(" per update");
 
-    sTuner = new STunePIDTuner(&currentAirSpeed, &currPWM, STUNE_METHOD);
+    sTuner = new STunePIDTuner(&currentAirspeed, &pidOutput, STUNE_METHOD);
     sTuner->setEmergencyStop(MAX_AIRSPEED);
     Serial.print("[INIT] sTune... OK (method: ");
     Serial.print(sTuner->getTuningMethodName()); Serial.println(")");
@@ -357,7 +375,7 @@ void loop() {
 
     // 1. Sensors: fresh airspeed for both the commands and the controller
     float pressure = readPressureAveraged();
-    currentAirSpeed = calcAirspeed(pressure, readAirDensity());
+    currentAirspeed = calcAirspeed(pressure, readAirDensity());
 
     // 2. User commands, accepted in every mode (stop must always work)
     ControlMode modeBeforeCommands = controlMode;
@@ -665,8 +683,8 @@ void setFanPwmRateLimited(int pwm) {
 
 // Stop the fan now and leave the PID idle at zero output and zero target.
 void stopFan() {
-    desiredAirSpeed = 0;
-    currPWM = 0;
+    targetAirspeed = 0;
+    pidOutput = 0;
     setFanPwm(0);
     pidBumplessStart();
 }
@@ -687,7 +705,7 @@ void stopAll(const char *reason) {
 
 // Hand the fan to the PID without a bump. Switching QuickPID from manual to
 // timer mode runs its Initialize(): the integral starts at the present
-// output (currPWM) and the derivative at the present airspeed, so the first
+// output (pidOutput) and the derivative at the present airspeed, so the first
 // Compute() continues smoothly from where the fan is now. (QuickPID's Reset()
 // is never used: it zeroes the integral and drops the output to about 0.)
 void pidBumplessStart() {
@@ -701,7 +719,7 @@ void runPidControl() {
     // fan coasts down, the falling airspeed would otherwise make the D and
     // P-on-measurement terms push PWM up again. stopFan() also keeps the PID
     // initialised, so a new target starts smoothly from 0 PWM.
-    if (desiredAirSpeed <= 0) {
+    if (targetAirspeed <= 0) {
         stopFan();
         return;
     }
@@ -732,9 +750,9 @@ void runPidControl() {
         myPID.SetOutputSum(sumLimited);
         // Compute()'s own output formula. It is sum + D only because P is on
         // measurement (already inside the sum); P on error would add a term.
-        currPWM = constrain(sumLimited + myPID.GetDterm(), 0.0f, 255.0f);
+        pidOutput = constrain(sumLimited + myPID.GetDterm(), 0.0f, 255.0f);
     }
-    setFanPwmRateLimited((int)round(currPWM));
+    setFanPwmRateLimited((int)round(pidOutput));
 }
 
 // Clamp the gains to the allowed ranges (reporting any that were clamped)
@@ -777,7 +795,7 @@ float clampGain(const char *name, float value, float minValue, float maxValue) {
 // every new target or tune until the sensor gives valid data.
 void checkPressureSensor() {
     if (invalidPressureReads < MAX_INVALID_PRESSURE_READS) return;
-    if (controlMode == MODE_PID && desiredAirSpeed <= 0 && fanPwm == 0) return;   // already off
+    if (controlMode == MODE_PID && targetAirspeed <= 0 && fanPwm == 0) return;   // already off
     stopAll("no valid pressure data");
     Serial.println("[ERROR] Differential pressure sensor not responding");
 }
@@ -793,7 +811,7 @@ void checkPressureSensor() {
 // fanState names the drive level in the error message. Returns true if it
 // stopped the fan (a tune is aborted).
 bool checkAirflow(bool fanDriven, const char *fanState) {
-    if (desiredAirSpeed <= 0 || currentAirSpeed >= NO_AIRFLOW_SPEED) {
+    if (targetAirspeed <= 0 || currentAirspeed >= NO_AIRFLOW_SPEED) {
         noAirflowDrivenMs = 0;
         return false;
     }
@@ -812,7 +830,7 @@ bool checkAirflow(bool fanDriven, const char *fanState) {
 
 // Auto-tunes only work with a clear airspeed signal around the target.
 bool tuneTargetOk() {
-    if (desiredAirSpeed >= MIN_TUNE_SETPOINT) return true;
+    if (targetAirspeed >= MIN_TUNE_SETPOINT) return true;
     Serial.print("[ERROR] Set a target of at least "); Serial.print(MIN_TUNE_SETPOINT, 1);
     Serial.println(" m/s before tuning (e.g. 10, then tune or stune)");
     return false;
@@ -824,7 +842,7 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     if (!tuneTargetOk()) return;
     // The relay switches back to LOW only above target + hysteresis, so that
     // airspeed must still be measurable.
-    if (desiredAirSpeed + RELAY_HYSTERESIS > maxAirspeed()) {
+    if (targetAirspeed + RELAY_HYSTERESIS > maxAirspeed()) {
         Serial.print("[ERROR] Relay tune needs target + "); Serial.print(RELAY_HYSTERESIS, 1);
         Serial.print(" m/s within the sensor limit of "); Serial.print(maxAirspeed(), 1);
         Serial.println(" m/s - set a lower target");
@@ -833,9 +851,11 @@ void startRelayTune(int pwmLow, int pwmHigh) {
 
     bool autoRange = (pwmLow < 0 || pwmHigh < 0);
     if (autoRange) {
-        int estimatedPwm = (int)round(desiredAirSpeed * 8);   // rough fan sensitivity
-        pwmHigh = constrain(estimatedPwm + 20, 40, 245);
-        pwmLow = constrain(estimatedPwm - 20, 20, 150);
+        int estimatedPwm = (int)round(targetAirspeed * FAN_PWM_PER_MPS_ESTIMATE);
+        pwmHigh = constrain(estimatedPwm + RELAY_AUTO_PWM_OFFSET,
+                            RELAY_AUTO_HIGH_MIN, RELAY_AUTO_HIGH_MAX);
+        pwmLow = constrain(estimatedPwm - RELAY_AUTO_PWM_OFFSET,
+                           RELAY_AUTO_LOW_MIN, RELAY_AUTO_LOW_MAX);
     } else if (pwmLow >= pwmHigh) {
         Serial.println("[ERROR] PWM low must be less than PWM high (e.g. tune 40 100)");
         return;
@@ -846,7 +866,7 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     Serial.println("\n=====================================");
     Serial.println("[RELAY] AUTO-TUNE STARTING");
     Serial.println("=====================================");
-    Serial.print("[RELAY] Target airspeed: "); Serial.print(desiredAirSpeed, 2); Serial.println(" m/s");
+    Serial.print("[RELAY] Target airspeed: "); Serial.print(targetAirspeed, 2); Serial.println(" m/s");
     Serial.println("[RELAY] Method: Astrom-Hagglund relay, Pessen integral rule");
     Serial.print("[RELAY] PWM range: "); Serial.print(relayPwmLow);
     Serial.print(" - "); Serial.print(relayPwmHigh);
@@ -860,8 +880,8 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     tuneStartTime = millis();
     noAirflowDrivenMs = 0;
     firstCrossing = true;
-    peakHigh = currentAirSpeed;
-    peakLow = currentAirSpeed;
+    peakHigh = currentAirspeed;
+    peakLow = currentAirspeed;
     relayCycles = 0;
     sumPeriodsS = 0.0;
     sumAmplitudes = 0.0;
@@ -873,7 +893,7 @@ void startRelayTune(int pwmLow, int pwmHigh) {
 void runRelayTune() {
     // The relay levels are fixed, so a strong fan can overshoot the sensor
     // range; sTune has the same limit as its emergency stop.
-    if (currentAirSpeed > MAX_AIRSPEED) {
+    if (currentAirspeed > MAX_AIRSPEED) {
         abortTuning("airspeed above MAX_AIRSPEED");
         return;
     }
@@ -881,12 +901,12 @@ void runRelayTune() {
     // until the timeout, even at PWM 255.
     if (checkAirflow(relayHigh, "the high relay PWM")) return;
 
-    if (currentAirSpeed > peakHigh) peakHigh = currentAirSpeed;
-    if (currentAirSpeed < peakLow) peakLow = currentAirSpeed;
+    if (currentAirspeed > peakHigh) peakHigh = currentAirspeed;
+    if (currentAirspeed < peakLow) peakLow = currentAirspeed;
 
-    if (!relayHigh && currentAirSpeed < desiredAirSpeed - RELAY_HYSTERESIS) {
+    if (!relayHigh && currentAirspeed < targetAirspeed - RELAY_HYSTERESIS) {
         setRelay(true);
-    } else if (relayHigh && currentAirSpeed > desiredAirSpeed + RELAY_HYSTERESIS) {
+    } else if (relayHigh && currentAirspeed > targetAirspeed + RELAY_HYSTERESIS) {
         setRelay(false);
         recordRelayCycle();
         if (relayCycles >= REQUIRED_CYCLES) {
@@ -911,12 +931,12 @@ void runRelayTune() {
 void setRelay(bool high) {
     relayHigh = high;
     int pwm = high ? relayPwmHigh : relayPwmLow;
-    currPWM = pwm;
+    pidOutput = pwm;
     setFanPwm(pwm);
     if (!serialHasRoom(STATUS_LINE_MAX_LENGTH)) return;
     Serial.print("[RELAY] Switched to "); Serial.print(high ? "HIGH" : "LOW");
     Serial.print(" (PWM "); Serial.print(pwm);
-    Serial.print(") at V="); Serial.print(currentAirSpeed, 2); Serial.println(" m/s");
+    Serial.print(") at V="); Serial.print(currentAirspeed, 2); Serial.println(" m/s");
 }
 
 // Called at every HIGH->LOW switch: one full oscillation cycle has ended.
@@ -940,8 +960,8 @@ void recordRelayCycle() {
     // so the peaks always belong to exactly one cycle.
     firstCrossing = false;
     lastCrossingTime = now;
-    peakHigh = currentAirSpeed;
-    peakLow = currentAirSpeed;
+    peakHigh = currentAirspeed;
+    peakLow = currentAirspeed;
 }
 
 // Enough cycles: compute Ku and Tu, then the PID gains.
@@ -980,10 +1000,10 @@ void completeRelayTune() {
 void startSTune() {
     if (!tuneTargetOk()) return;
 
-    // Step PWM: sTune's "outputStep" is the PWM during the step, not the size
-    // of the step. Rough PWM needed for the target, kept in a range that gives
-    // a clear response without running the fan flat out.
-    float outputStep = constrain(desiredAirSpeed * 8.0, 60.0, 200.0);
+    // Step PWM (sTune's "outputStep" is the PWM during the step, not the size
+    // of the step): the estimated PWM for the target, within the step limits.
+    float outputStep = constrain(targetAirspeed * FAN_PWM_PER_MPS_ESTIMATE,
+                                 STUNE_STEP_PWM_MIN, STUNE_STEP_PWM_MAX);
 
     // The step starts with the fan running, not stopped: near 0 m/s the pitot
     // signal is mostly noise and sTune then finds a wrong dead time. After the
@@ -991,13 +1011,13 @@ void startSTune() {
     // fan did before. The top of the step is unchanged, so is the peak airspeed.
     // MAX_AIRSPEED is the input span and the emergency stop.
     float outputStart = round(outputStep * STUNE_START_FRACTION);
-    if (sTuner->startTuning(desiredAirSpeed, MAX_AIRSPEED, 255.0, outputStart, outputStep,
+    if (sTuner->startTuning(targetAirspeed, MAX_AIRSPEED, 255.0, outputStart, outputStep,
                             STUNE_TEST_TIME_S, STUNE_SETTLE_TIME_S, STUNE_SAMPLES)) {
         controlMode = MODE_STUNE;
     }
 }
 
-// sTune step test, called on every loop() pass. sTune sets currPWM through
+// sTune step test, called on every loop() pass. sTune sets pidOutput through
 // the pointer it was given; setFanPwm() only writes when the value changes.
 // When the test ends, the wrapper's report is printed only after the fan has
 // a safe state (see printReport()).
@@ -1023,7 +1043,7 @@ void runSTune() {
         return;
     }
 
-    setFanPwm((int)round(currPWM));
+    setFanPwm((int)round(pidOutput));
 }
 
 // End a running relay tune or sTune without applying any gains (user abort,
@@ -1052,9 +1072,9 @@ void finishTuning(float newKp, float newKi, float newKd) {
     }
     if (controlMode == MODE_STUNE) sTuner->reset();
     controlMode = MODE_PID;
-    currPWM = fanPwm;                                  // PWM the fan runs at now
+    pidOutput = fanPwm;                  // PWM the fan runs at now
     pidBumplessStart();
-    Serial.print("[TUNE] PID running at target "); Serial.print(desiredAirSpeed, 2);
+    Serial.print("[TUNE] PID running at target "); Serial.print(targetAirspeed, 2);
     Serial.println(" m/s with the new gains");
     Serial.print("[TUNE] To reuse these gains later: tune ");
     Serial.print(kp, 3); Serial.print(" "); Serial.print(ki, 3); Serial.print(" "); Serial.println(kd, 3);
@@ -1250,8 +1270,8 @@ void setTargetAirspeed(float target) {
         target = limit;
     }
     // Only the setpoint changes; the PID continues smoothly from the present PWM.
-    desiredAirSpeed = target;
-    Serial.print("[SERIAL] New target: "); Serial.print(desiredAirSpeed, 2); Serial.println(" m/s");
+    targetAirspeed = target;
+    Serial.print("[SERIAL] New target: "); Serial.print(targetAirspeed, 2); Serial.println(" m/s");
 }
 
 // tune <Kp> <Ki> <Kd>: set the PID gains by hand.
@@ -1323,12 +1343,12 @@ void printDataLine(unsigned long now, float pressure) {
     } else {
         Serial.print((now - runStartTime) / 1000); Serial.print("s | ");
     }
-    Serial.print("V:"); Serial.print(currentAirSpeed, 2);
-    Serial.print(" | SP:"); Serial.print(desiredAirSpeed, 2);
+    Serial.print("V:"); Serial.print(currentAirspeed, 2);
+    Serial.print(" | SP:"); Serial.print(targetAirspeed, 2);
     Serial.print(" | PWM:"); Serial.print(fanPwm);
     Serial.print(" | P:"); Serial.print(pressure, 2);
     Serial.print(" | Temp:"); Serial.print(airTemperatureC, 1);
-    Serial.print(" | Err:"); Serial.print(desiredAirSpeed - currentAirSpeed, 2);
+    Serial.print(" | Err:"); Serial.print(targetAirspeed - currentAirspeed, 2);
 
     // Every 20th line in PID mode: the active gains and averaging length
     if (dataLineCount % 20 == 0 && controlMode == MODE_PID) {

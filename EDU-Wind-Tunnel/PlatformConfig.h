@@ -31,9 +31,11 @@
 #include <Arduino.h>
 
 // ---- ESP32-P4 (e.g. Waveshare ESP32-P4-WiFi6-Touch-LCD-7B) ----
-// Pins are kept at GPIO <= 36 to avoid LDO power issues on high-numbered
-// pins. GPIO 14-19 carry the SDIO link to the on-board ESP32-C6 (WiFi):
-// do NOT use them.
+// The fan pin is a low GPIO (<= 36), away from the high GPIOs that some
+// boards power from a separate (LDO) supply. A board's own defaults may still
+// use high pins, e.g. I2C on the M5Stack Tab5 (53/54, see below).
+// GPIO 14-19 carry the SDIO link to the on-board ESP32-C6 (WiFi): do NOT
+// use them.
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
   #define BOARD_NAME            "ESP32-P4"
   // -1 = the default I2C pins of the board selected in the IDE (SDA/SCL in
@@ -80,7 +82,8 @@
   #error "Unsupported board. EDU-Wind-Tunnel supports the ESP32-P4 and Arduino Uno R4 Minima / WiFi."
 #endif
 
-// Status LED for fatal errors. The ESP32-P4 core defines no LED_BUILTIN.
+// Status LED for fatal errors: the board's LED_BUILTIN if its core variant
+// defines one (Uno R4 and some ESP32-P4 boards), otherwise none.
 #ifdef LED_BUILTIN
   #define STATUS_LED_PIN        LED_BUILTIN
 #else

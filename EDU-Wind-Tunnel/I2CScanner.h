@@ -14,16 +14,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// Maximum number of I2C devices that can be tracked
-#define MAX_I2C_DEVICES 20
-
-// Structure to store device location
-struct I2CDeviceInfo {
-    uint8_t address;
-    TwoWire* bus;
-    const char* busName;
-};
-
 /**
  * Scan all available I2C buses and report found devices
  * 
@@ -73,20 +63,5 @@ TwoWire* getDeviceBus(uint8_t address, const char** busName = nullptr);
  * @return Pointer to the first bus on which the address ACKs, or nullptr
  */
 TwoWire* probeDeviceBus(uint8_t address, const char** busName = nullptr);
-
-/**
- * Get count of devices found during last scan
- * 
- * @return Number of I2C devices in the registry
- */
-int getDeviceCount();
-
-/**
- * Get device info by index
- * 
- * @param index Index in the device registry (0 to getDeviceCount()-1)
- * @return Pointer to device info, or nullptr if index out of range
- */
-const I2CDeviceInfo* getDeviceInfo(int index);
 
 #endif // I2C_SCANNER_H

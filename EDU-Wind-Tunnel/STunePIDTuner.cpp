@@ -30,19 +30,15 @@ STunePIDTuner::STunePIDTuner(float *input, float *output, sTune::TuningMethod tu
       _setpoint(0.0),
       _status(IDLE),
       _startTime(0),
-      _timeout(120000), // Default 120 second timeout
+      _timeout(0),
       _kp(0.0),
       _ki(0.0),
       _kd(0.0),
       _gainsValid(false),
       _tuningMethod(tuningMethod),
-      _inputSpan(30.0),
-      _outputSpan(255.0),
-      _outputStart(0.0),
-      _outputStep(100.0),
-      _testTimeSec(60),
-      _settleTimeSec(5),
-      _samples(300),
+      _inputSpan(0.0),
+      _outputSpan(0.0),
+      _settleTimeSec(0),
       _eStop(0.0),
       _eStopInput(0.0) {
     createTuner();
@@ -90,11 +86,7 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     _setpoint = setpoint;
     _inputSpan = inputSpan;
     _outputSpan = outputSpan;
-    _outputStart = outputStart;
-    _outputStep = outputStep;
-    _testTimeSec = testTimeSec;
     _settleTimeSec = settleTimeSec;
-    _samples = samples;
     
     // Reset state
     _gainsValid = false;
@@ -105,7 +97,8 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     // Fresh sTune object for this run, then configure it.
     // Memory: Configure() -> sTan::begin() allocates a new float[samples * 0.06]
     // buffer for the sliding tangent on every call and never frees the old
-    // one (4 floats = 16 bytes of heap per sTune run with 75 samples). The
+    // one, so every sTune run loses 4 x (int)(samples x 0.06) bytes of heap:
+    // a few bytes for the sample counts used here, so many runs fit. The
     // buffer belongs to the global sTan object in sTune.cpp, not to the sTune
     // object, so the wrapper cannot free it without changing the library.
     // Configure() is called exactly once per run.
@@ -121,8 +114,9 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     // the caller, and leaves the run to end only by the timeout.
     _tuner->SetEmergencyStop(INFINITY);
     
-    // Calculate timeout: settle time + test time + 50% margin
-    _timeout = (settleTimeSec + testTimeSec) * 1500; // milliseconds
+    // Safety net only: sTune itself ends the test after settle + test time.
+    // The margin covers update passes that run a little slow.
+    _timeout = (settleTimeSec + testTimeSec) * 1500; // ms: + 50 %
     _startTime = millis();
     _status = SETTLING;
     
@@ -202,10 +196,6 @@ STunePIDTuner::TuningStatus STunePIDTuner::update() {
     return _status;
 }
 
-bool STunePIDTuner::isFinished() {
-    return (_status == COMPLETED || _status == TIMEOUT || _status == ERROR);
-}
-
 bool STunePIDTuner::getTunedGains(float &kp, float &ki, float &kd) {
     if (!_gainsValid || _status != COMPLETED) {
         return false;
@@ -272,15 +262,15 @@ bool STunePIDTuner::resultUsable() const {
 // (COMPLETED), or why it stopped early (TIMEOUT, ERROR).
 void STunePIDTuner::printReport() {
     if (_status == TIMEOUT) {
-        Serial.println("[sTune] TIMEOUT!");
-        Serial.println("[sTune] Tuning took too long - aborting");
-        Serial.print("[sTune] Duration: "); Serial.print((millis() - _startTime) / 1000);
-        Serial.println(" seconds");
-        Serial.println("[sTune] Troubleshooting:");
-        Serial.println("        - Check if system responds to output step");
-        Serial.println("        - Verify sensors are working correctly");
-        Serial.println("        - Try larger output step");
-        Serial.println("        - Increase test time estimate");
+        // sTune takes each sample at least one sample period after the
+        // previous one, so late update passes add up. It only falls 50 %
+        // behind when loop() runs far too slowly.
+        Serial.print("[sTune] TIMEOUT: no result after "); Serial.print(_timeout / 1000);
+        Serial.println(" s (settle + test time + 50 %)");
+        Serial.println("[sTune] The control loop ran too slowly for the step test. Look for");
+        Serial.println("        [WARN] Update pass took ... messages: slow sensor reads point to");
+        Serial.println("        I2C trouble (wiring, long cables, loose connectors).");
+        Serial.println("        Then type stune again, or use the relay tune (tune).");
         return;
     }
     if (_status == ERROR) {
@@ -333,13 +323,6 @@ float STunePIDTuner::getTau() const {
         return _tuner->GetTau();
     }
     return 0.0;
-}
-
-void STunePIDTuner::setTuningMethod(sTune::TuningMethod method) {
-    _tuningMethod = method;
-    if (_tuner != nullptr) {
-        _tuner->SetTuningMethod(method);
-    }
 }
 
 const char* STunePIDTuner::getTuningMethodName() const {

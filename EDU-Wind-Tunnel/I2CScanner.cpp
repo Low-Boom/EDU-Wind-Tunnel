@@ -21,7 +21,13 @@
 // without pull-ups cannot stall the scan for long.
 const uint16_t SCAN_TIMEOUT_MS = 25;
 
-// Global device registry
+// Device registry: where each device was found (see getDeviceBus())
+const int MAX_I2C_DEVICES = 20;
+struct I2CDeviceInfo {
+    uint8_t address;
+    TwoWire* bus;
+    const char* busName;
+};
 static I2CDeviceInfo deviceRegistry[MAX_I2C_DEVICES];
 static int deviceCount = 0;
 
@@ -168,16 +174,5 @@ TwoWire* probeDeviceBus(uint8_t address, const char** busName) {
             return &Wire1;
         }
     #endif
-    return nullptr;
-}
-
-int getDeviceCount() {
-    return deviceCount;
-}
-
-const I2CDeviceInfo* getDeviceInfo(int index) {
-    if (index >= 0 && index < deviceCount) {
-        return &deviceRegistry[index];
-    }
     return nullptr;
 }
