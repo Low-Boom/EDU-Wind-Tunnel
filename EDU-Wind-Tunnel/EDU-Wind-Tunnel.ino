@@ -209,6 +209,7 @@ float calcAirspeed(float pressurePa, float density);
 float maxAirspeed();
 // Fan and PID
 void setFanPwm(int pwm);
+void setFanPwmRateLimited(int pwm);
 void stopFan();
 void stopAll(const char *reason);
 void pidBumplessStart();
@@ -648,6 +649,12 @@ void setFanPwm(int pwm) {
     fanPwm = pwm;
 }
 
+// Move the fan towards pwm by at most MAX_PWM_CHANGE_PER_CYCLE (one update).
+void setFanPwmRateLimited(int pwm) {
+    setFanPwm(constrain(pwm, fanPwm - MAX_PWM_CHANGE_PER_CYCLE,
+                        fanPwm + MAX_PWM_CHANGE_PER_CYCLE));
+}
+
 // Stop the fan now and leave the PID idle at zero output and zero target.
 void stopFan() {
     desiredAirSpeed = 0;
@@ -717,9 +724,7 @@ void runPidControl() {
         // measurement (already inside the sum); P on error would add a term.
         currPWM = constrain(sumLimited + myPID.GetDterm(), 0.0f, 255.0f);
     }
-    setFanPwm(constrain((int)round(currPWM),
-                        fanPwm - MAX_PWM_CHANGE_PER_CYCLE,
-                        fanPwm + MAX_PWM_CHANGE_PER_CYCLE));
+    setFanPwmRateLimited((int)round(currPWM));
 }
 
 // Clamp the gains to the allowed ranges (reporting any that were clamped)
@@ -931,12 +936,20 @@ void completeRelayTune() {
     Serial.println("\n=====================================");
     Serial.println("[RELAY] AUTO-TUNE COMPLETE");
     Serial.println("=====================================");
-    Serial.print("        Period Tu: "); Serial.print(tu, 2); Serial.println(" s");
+    // Relay estimates: the hysteresis band shifts the oscillation away from
+    // the true ultimate point, so these are approximations of Ku and Tu.
+    Serial.print("        Period Tu (relay estimate): "); Serial.print(tu, 2); Serial.println(" s");
     Serial.print("        Amplitude: "); Serial.print(amplitude, 2); Serial.println(" m/s");
-    Serial.print("        Ultimate gain Ku: "); Serial.print(ku, 3); Serial.println(" PWM per m/s");
+    Serial.print("        Ultimate gain Ku (relay estimate): "); Serial.print(ku, 3);
+    Serial.println(" PWM per m/s");
     Serial.print("        Pessen integral rule: Kp="); Serial.print(newKp, 3);
     Serial.print(" Ki="); Serial.print(newKi, 3);
     Serial.print(" Kd="); Serial.println(newKd, 3);
+    // The tune always ends at a HIGH->LOW switch, i.e. at the low relay PWM,
+    // which is below what the target needs, so the airspeed would dip after
+    // the hand-over. Start the PID from the mean relay output instead (the
+    // PWM that held the oscillation around the target), within the rate limit.
+    setFanPwmRateLimited((relayPwmLow + relayPwmHigh) / 2);
     finishTuning(newKp, newKi, newKd);
 }
 
