@@ -1,403 +1,382 @@
-# Advanced PID Tuning Guide
+# PID Tuning Guide
 
-**Recommendations from Claude Sonnet 4.5 on PID tuning for this repository. The content is determined to be suitably accurate by the author, but take all AI generated content with skepticism and critical thinking.**
-**Repository:** [EDU-wind-tunnel](https://github.com/Low-Boom/EDU-wind-tunnel)
+NOTE: AI tools helped to write this guide. Verify all advice on your own tunnel.
 
----
-
-## Table of Contents
-- [PID Basics](#pid-basics)
-- [Understanding Each Term](#understanding-each-term)
-- [Tuning Strategies](#tuning-strategies)
-- [Auto-Tune Deep Dive](#auto-tune-deep-dive)
-- [Manual Tuning Process](#manual-tuning-process)
-- [Performance Optimization](#performance-optimization)
-- [Troubleshooting Performance](#troubleshooting-performance)
-- [Reference Tables](#reference-tables)
+This guide tells you how the airspeed controller works and how to tune it.
+For the commands and the serial output, see [README.md](README.md).
 
 ---
 
-(Previous content from earlier in the message...)
+## Before you start
 
-### Problem: Oscillation
+- The default gains are `Kp=25.0, Ki=10.0, Kd=15.0`. They are only a starting point.
+  They are validated in simulation only, not on a real tunnel.
+  Tune them for your fan and verify the result on your tunnel.
+- Fast fans can need lower gains than the defaults.
+- The firmware does not store gains. After a reset, it uses the defaults again.
+  - To use your gains again, type the `tune <Kp> <Ki> <Kd>` line that the firmware prints after an auto-tune.
+  - To change the defaults, edit `DEFAULT_KP`, `DEFAULT_KI` and `DEFAULT_KD` in the Settings section of `EDU-Wind-Tunnel.ino`, then upload again.
+- To stop the fan, type `0` or `stop`. This also stops a running auto-tune.
 
-**Symptoms:**
-- Bounces around setpoint
-- Never settles
-- ±0.5-2 m/s variation
+Gain units (all gains use seconds):
 
-**Diagnosis:**
-```
-Sustained oscillation = Too much gain
+| Gain | Unit | Limits |
+|---|---|---|
+| Kp | PWM per m/s | 1-100 |
+| Ki | PWM per (m/s x s) | 0.1-50 |
+| Kd | PWM x s per m/s | 0.1-50 |
 
-Check:
-1. Kp too high (most common)
-2. Ki too high
-3. Mechanical resonance
-4. Sensor noise
-```
-
-**Solutions:**
-```
-Immediate:
-tune 12 4 15  # Low Kp, low Ki, high Kd
-
-Then test incrementally:
-tune 15 4 15
-tune 18 4 15
-tune 20 5 15  # Find stability threshold
-```
-
-### Problem: Integral Windup
-
-**Symptoms:**
-- Large overshoot after long error
-- Slow to recover from disturbances
-- PWM saturates at 255
-
-**Diagnosis:**
-```
-Integral term accumulates when PWM saturated
-System can't respond, but integral keeps growing
-When error reduces, huge overshoot results
-```
-
-**Solutions:**
-1. **Code already has anti-windup** (conditional integration)
-2. Reduce Ki if still happening
-3. Reduce setpoint if consistently hitting PWM limits
+The same limits apply to manual entry and to both auto-tunes.
+The firmware clamps a value outside the limits and tells you, for example:
 
 ```
-Before: tune 20 15 12  (high Ki)
-After:  tune 20 8 12   (moderate Ki)
-```
-
-### Problem: Noise Amplification
-
-**Symptoms:**
-- PWM output jumpy
-- Motor "buzzes"
-- Output changes rapidly even when stable
-
-**Diagnosis:**
-```
-Kd amplifies measurement noise
-Check derivative term contribution
-```
-
-**Solutions:**
-```
-1. Reduce Kd:
-   tune 20 8 8   # Was Kd=12
-
-2. Increase averaging:
-   avg 25        # More smoothing
-
-3. Check sensor mounting:
-   Vibration → noise → derivative action
+[PID] Kp = 150.000 is outside 1.0-100.0, clamped to 100.000
 ```
 
 ---
 
-## Reference Tables
+## How the controller works
 
-### Quick Reference: Gain Effects
+### Update loop and timer mode
 
-| Gain | ↑ Increase Effect | ↓ Decrease Effect |
-|------|-------------------|-------------------|
-| **Kp** | Faster response | Slower response |
-|  | More overshoot | Less overshoot |
-|  | May oscillate | More stable |
-|  | Smaller steady error | Larger steady error |
-| **Ki** | Eliminates SS error | May have SS error |
-|  | More overshoot | Less overshoot |
-|  | Windup risk | Stable |
-|  | Slower disturbance recovery | Faster recovery |
-| **Kd** | Less overshoot | More overshoot |
-|  | Dampens oscillation | May oscillate |
-|  | Sensitive to noise | Less noise sensitive |
-|  | Faster settling | Slower settling |
+Every 200 ms (`UPDATE_INTERVAL_MS`) the firmware reads the sensors, runs the typed commands, runs the controller and prints one data line.
 
-### Typical Gain Ranges by Application
+The controller is QuickPID 3.1.9 in timer mode.
+The firmware calls `Compute()` exactly once per 200 ms update.
+QuickPID scales Ki and Kd for this 200 ms sample time, so you give the gains in seconds-based units.
 
-| Application | Kp | Ki | Kd | Avg | Notes |
-|-------------|----|----|----|----|-------|
-| **Fast Response** | 30-40 | 10-15 | 15-20 | 3-5 | Competition/demo |
-| **Balanced** | 20-25 | 6-10 | 10-15 | 15-20 | General use |
-| **Stable** | 15-20 | 4-6 | 10-12 | 25-30 | Educational |
-| **Precision** | 20-25 | 12-18 | 12-15 | 15-20 | Research/testing |
+When the target airspeed is 0, the firmware does not run the controller. It holds the PWM value at 0.
 
-### Tuning Decision Tree
+When you set a new target, only the target changes. The controller continues from the present PWM value.
+When you set new gains, the integral stays. The PWM value does not jump.
 
-```
-START
-  ↓
-Response too slow? ──YES──> Increase Kp by 30%
-  ↓ NO
-  ↓
-Overshoots? ──YES──> Reduce Kp by 20%, Increase Kd by 30%
-  ↓ NO
-  ↓
-Oscillates? ──YES──> Reduce Kp by 40%, Reduce Ki by 50%
-  ↓ NO
-  ↓
-Steady-state error? ──YES──> Increase Ki by 30%
-  ↓ NO
-  ↓
-✅ OPTIMAL TUNING
-```
+### P and D on measurement
 
-### Auto-Tune Success Checklist
+The P and D terms act on the measured airspeed, not on the error.
 
-Before auto-tuning:
-- [ ] Sensor calibrated (`recal`)
-- [ ] Target speed set (>2 m/s)
-- [ ] Motor responds to PWM commands
-- [ ] System can reach target speed
-- [ ] No obstructions in tunnel
+- A step in the target airspeed does not make the PWM value jump.
+- After a target change, the I term (Ki) moves the fan to the new target. The P term (Kp) resists fast changes of the airspeed.
+- Against disturbances (for example, a model in the test section), Kp and Kd act as usual.
 
-During auto-tune:
-- [ ] Motor oscillating between HIGH and LOW
-- [ ] Airspeed oscillating around target
-- [ ] State changes visible in serial output
-- [ ] 3 complete cycles detected
+### Anti-windup by clamping
 
-After auto-tune:
-- [ ] Gains calculated successfully
-- [ ] Gains within expected ranges
-- [ ] Test with small setpoint change
-- [ ] Fine-tune if needed
+QuickPID keeps its running sum (the integral and the P-on-measurement part) inside the PWM range 0-255.
+Thus the sum cannot grow without limit while the fan runs at full power.
 
-### Common Gain Combinations
+QuickPID also has a conditional anti-windup mode (`iAwCondition`). The firmware does not use it.
+In QuickPID 3.1.9 this mode acts on most updates in which the airspeed rises. Then it makes the loop much more aggressive upwards than downwards.
 
-| Scenario | Kp | Ki | Kd | Expected Behavior |
-|----------|----|----|----|--------------------|
-| **Default** | 31 | 12 | 10 | Moderate response, some overshoot |
-| **Conservative** | 15 | 5 | 8 | Slow, stable, no overshoot |
-| **Aggressive** | 35 | 15 | 18 | Fast, 10-20% overshoot |
-| **Precision** | 22 | 15 | 13 | Slow approach, exact setpoint |
-| **Noisy System** | 18 | 6 | 6 | Low derivative, more averaging |
+### PWM rate limit (PID mode only)
+
+In PID mode, the PWM value changes by not more than 25 per update (`MAX_PWM_CHANGE_PER_CYCLE`).
+The firmware applies this limit around `Compute()`, in two steps:
+
+1. The running sum moves by not more than 25 from its last value. The controller does not store the excess, so there is no windup from the limit.
+2. The fan PWM value moves by not more than 25 from its present value.
+
+A change from 0 to 255 takes at least 11 updates (2.2 s).
+The limit does not apply to a stop, to the relay levels or to the sTune steps.
+
+### Averaging delay
+
+The firmware calculates the airspeed from a moving average of the last N pressure readings, one reading per update.
+Set N with `avg <N>` (1-50, default 5).
+
+The average delays the airspeed signal. The mean delay is (N - 1) / 2 x 200 ms:
+
+| `avg` | Window | Mean delay |
+|---|---|---|
+| 5 (default) | 1.0 s | 0.4 s |
+| 20 | 4.0 s | 1.9 s |
+| 50 | 10.0 s | 4.9 s |
+
+This delay is inside the control loop. More delay makes the loop less stable.
+In simulation, 20 samples made the default gains oscillate on 3 of 5 fan models. With 5 samples, 4 of 5 fan models were stable.
+
+- A longer average gives a smoother reading. If you increase `avg`, reduce the gains or tune again.
+- Run the auto-tunes with the `avg` value that you will use. The tuners measure the averaged airspeed.
 
 ---
 
-## Advanced Topics
+## Manual tuning
 
-### Gain Scheduling
+1. Set a target airspeed, for example `10`.
+2. Wait until the airspeed is steady. Read `V`, `PWM` and `Err` in the data lines.
+3. Change the target by a small step, for example from `10` to `12`.
+4. Look at the response: the time to reach the target, the overshoot and any oscillation.
+5. Set the target back to `10` and look at the response again.
+6. Change one gain with `tune <Kp> <Ki> <Kd>`, for example `tune 20 8 12`.
+7. Do steps 3 to 6 again until the response is good.
+8. Do the test at a low, a middle and a high target airspeed.
+9. Write down the final gains.
 
-For systems needing different gains at different speeds:
+Every 20th data line in PID mode shows the present gains and the averaging length, for example `Kp:25.0 Ki:10.0 Kd:15.0 Avg:5`.
+The firmware confirms new gains, for example `[PID] Gains set: Kp=20.000 Ki=8.000 Kd=12.000`.
 
-```cpp
-// Add to code after line with myPID.SetTunings()
-void updateGainSchedule() {
-    float speed = desiredAirSpeed;
-    
-    if (speed < 8.0) {
-        // Low speed: gentle, precise
-        Kp = 18.0;
-        Ki = 6.0;
-        Kd = 10.0;
-    } else if (speed < 15.0) {
-        // Medium speed: balanced
-        Kp = 22.0;
-        Ki = 8.0;
-        Kd = 12.0;
-    } else {
-        // High speed: aggressive
-        Kp = 28.0;
-        Ki = 10.0;
-        Kd = 15.0;
-    }
-    
-    myPID.SetTunings(Kp, Ki, Kd);
-}
-```
-
-Call in `loop()` when setpoint changes.
-
-### Feed-Forward Control
-
-For predictable disturbances:
-
-```cpp
-// Add feed-forward term based on target
-float feedForward = desiredAirSpeed * 10.0;  // ~10 PWM per m/s
-currPWM += feedForward;
-```
-
-Reduces reliance on feedback, faster response.
-
-### Adaptive Tuning
-
-Auto-adjust gains based on performance:
-
-```cpp
-// Pseudo-code concept
-if (overshoot > 20%) {
-    Kp *= 0.9;  // Reduce by 10%
-}
-if (settlingTime > 10.0) {
-    Kp *= 1.1;  // Increase by 10%
-}
-```
-
-Requires performance metrics tracking.
+For the effect of each gain, see [Gain-effect reference](#gain-effect-reference).
 
 ---
 
-## Conclusion
+## Relay auto-tune (`tune`)
 
-**Remember:**
-1. Start conservative, increase gradually
-2. Auto-tune first, manual fine-tune second
-3. Test thoroughly at different setpoints
-4. Document your final gains
-5. Safety first - start slow!
+The relay auto-tune (Astrom-Hagglund method) runs the fan in a controlled oscillation around the target.
+From this oscillation it calculates the gains.
 
-**Tuning is iterative:**
+### Start
+
+1. Set a target airspeed of at least 2.0 m/s, for example `10`.
+2. Type `tune` (automatic PWM range) or `tune <low> <high>` (your own PWM range, for example `tune 40 100`).
+
+Conditions:
+
+- The target must be at least 2.0 m/s.
+- Target + 0.5 m/s must not be more than the sensor limit in the present air.
+- `<low>` and `<high>` must be whole numbers from 1 to 255, and `<low>` must be less than `<high>`.
+
+Automatic PWM range: the firmware estimates 8 PWM per m/s (`FAN_PWM_PER_MPS_ESTIMATE`):
+
 ```
-Tune → Test → Observe → Adjust → Repeat
+estimate = round(target x 8)
+high     = estimate + 20, kept within 40-245
+low      = estimate - 20, kept within 20-150
 ```
 
-**When in doubt:**
+Examples: 2 m/s gives 20-40, 5 m/s gives 20-60, 10 m/s gives 60-100, 20 m/s gives 140-180, 25 m/s gives 150-220.
+
+CAUTION: The estimate of 8 PWM per m/s can be wrong for your fan. Then the two levels do not bracket the target and the tune times out.
+Give the range by hand:
+
+1. Set the target in PID mode and wait until the airspeed is steady.
+2. Read the PWM value in the data lines.
+3. Type `tune <PWM - 20> <PWM + 20>`. Use a wider range if the tune times out again.
+
+### How it works
+
+- The fan starts at the low PWM level.
+- When the airspeed falls below target - 0.5 m/s, the fan goes to the high level.
+- When the airspeed rises above target + 0.5 m/s, the fan goes back to the low level.
+- The first switch from HIGH to LOW starts the measurement. Each later switch from HIGH to LOW ends one cycle.
+- A cycle is valid only if its amplitude is more than 0.5 m/s and its period is more than 2 s. The firmware ignores other cycles.
+- The tune ends after 3 valid cycles.
+
+During the tune the data lines start with `[TUNE]` and show the number of valid cycles, for example:
+
 ```
-tune 20 8 12    # Good starting point for most systems
+[TUNE] 16s | Cycle:2 | V:10.55 | SP:10.00 | PWM:60 | P:66.97 | Temp:20.0 | Err:-0.55
 ```
+
+### Gain formulas
+
+```
+Tu = mean period of the valid cycles (s)
+a  = mean amplitude of the valid cycles (m/s)
+d  = (high - low) / 2                          relay amplitude (PWM)
+Ku = 4 d / (pi a)                              ultimate gain (PWM per m/s)
+
+Pessen integral rule: Kp = 0.7 Ku, Ti = 0.4 Tu, Td = 0.15 Tu
+Kp = 0.7 Ku
+Ki = Kp / Ti = 1.75 Ku / Tu
+Kd = Kp x Td = 0.105 Ku x Tu
+```
+
+Ku and Tu are estimates. The hysteresis band moves the oscillation away from the true ultimate point.
+The firmware clamps the gains to the limits (Kp 1-100, Ki 0.1-50, Kd 0.1-50) and prints a `[PID] ... clamped` line for each changed gain.
+
+### Hand-over
+
+After a successful tune:
+
+1. The fan moves to the mean relay PWM, (low + high) / 2, within the rate limit.
+2. The firmware applies the new gains.
+3. The PID controller continues at the same target.
+
+Example from the simulation (target 10 m/s, automatic range 60-100):
+
+```
+=====================================
+[RELAY] AUTO-TUNE COMPLETE
+=====================================
+        Period Tu (relay estimate): 5.80 s
+        Amplitude: 1.06 m/s
+        Ultimate gain Ku (relay estimate): 24.073 PWM per m/s
+        Pessen integral rule: Kp=16.851 Ki=7.263 Kd=14.660
+[PID] Gains set: Kp=16.851 Ki=7.263 Kd=14.660
+[TUNE] PID running at target 10.00 m/s with the new gains
+[TUNE] To reuse these gains later: tune 16.851 7.263 14.660
+=====================================
+```
+
+### Aborts
+
+Each abort stops the fan, sets the target to 0 and keeps the old gains.
+The abort line is `[TUNE] Tuning aborted (<reason>) - fan stopped, target 0 m/s, gains unchanged`.
+
+| Reason | Cause | Extra message |
+|---|---|---|
+| `stopped by user` | You typed `0` or `stop`. | - |
+| `relay tune timeout` | Fewer than 3 valid cycles after 120 s. | `[RELAY] Not enough oscillation: <n> of 3 valid cycles` and advice |
+| `no airflow` | Airspeed below 1.0 m/s for 15 s in total at the high level. | `[ERROR] No airflow measured at the high relay PWM - check the pitot tubes and the fan` |
+| `no valid pressure data` | 5 invalid sensor readings in a row (1 s). | `[ERROR] Differential pressure sensor not responding` |
+| `airspeed above MAX_AIRSPEED` | Airspeed above 28.0 m/s. | - |
+| `the tuner gave invalid gains` | A gain is not a finite number. | `[ERROR] PID gains must be finite numbers - gains unchanged` |
+
+While a tune runs, the firmware accepts only `0` or `stop`. Other input gets `[BUSY] Tuning in progress - type 0 or stop to abort`.
 
 ---
 
-## sTune Advanced Autotuning (Optional)
+## sTune auto-tune (`stune`)
 
-### What is sTune?
+sTune (library sTune 2.4.0) makes an open-loop step test.
+It finds the inflection point of the airspeed curve after a PWM step and calculates a process model from it.
+The firmware uses the `Mixed_PID` rule: the average of the Ziegler-Nichols, damped-oscillation, no-overshoot and Cohen-Coon PID rules.
 
-sTune is an advanced open-loop PID autotuner that uses a novel inflection point test method. It's an alternative to the relay tuning method and offers several advantages:
+### Start
 
-**Benefits:**
-- **Faster tuning**: Typically completes in ½τ (half the system time constant)
-- **More stable**: Uses conservative tuning rules for minimal overshoot
-- **Automatic step sizing**: Determines optimal test parameters automatically
-- **Better process characterization**: Provides dead time, time constant, and process gain
+1. Set a target airspeed of at least 2.0 m/s, for example `10`.
+2. Type `stune`.
 
-**How it works:**
-1. Applies a step change to the output (PWM)
-2. Monitors the system response curve
-3. Detects the inflection point using a moving tangent method
-4. Calculates process characteristics (gain, dead time, tau)
-5. Applies tuning rules to determine optimal PID gains
+### Step test
 
-### Using sTune
-
-**Prerequisites:**
-- Install sTune library via Arduino Library Manager
-- System must have S-shaped step response (first-order with delay)
-
-**Basic usage:**
-```
-1. Set target airspeed: 10
-2. Type: stune
-3. Wait for tuning to complete (~30-60 seconds)
-4. Gains automatically applied
-```
-
-**sTune vs Relay Tuning:**
-
-| Feature | Relay Tuning | sTune |
-|---------|--------------|-------|
-| Method | Oscillation-based | Step response |
-| Duration | ~30-60 seconds | ~30-60 seconds |
-| Tuning style | Aggressive | Conservative |
-| Overshoot | Some overshoot | Minimal/none |
-| Process info | Limited | Detailed |
-| Best for | Fast response | Stable operation |
-
-**When to use sTune:**
-- Educational environments where stability is critical
-- Research applications requiring precise control
-- Systems where overshoot must be minimized
-- When you want detailed process characterization
-
-**When to use relay tuning:**
-- Fast, responsive control needed
-- Competition or demonstration scenarios
-- Quick tuning iterations desired
-- Some overshoot is acceptable
-
-### sTune Tuning Methods
-
-sTune provides multiple tuning methods (configured in code):
-
-1. **NoOvershoot_PID** (default): Conservative, stable response
-2. **ZN_PID**: Ziegler-Nichols, moderate aggressiveness
-3. **DampedOsc_PID**: Balanced response
-4. **CohenCoon_PID**: Good for systems with delay
-5. **Mixed_PID**: Average of all methods
-
-The default configuration uses **NoOvershoot_PID** for maximum stability.
-
-### Example sTune Output
+The firmware sets the step PWM from the target:
 
 ```
-[sTune] AUTOTUNING COMPLETE!
-[sTune] Duration: 45 seconds
-[sTune] Tuned PID Gains:
-        Kp = 18.2456
-        Ki = 7.8234
-        Kd = 11.3421
-[sTune] Process Characteristics:
-        Process Gain: 0.8234
-        Dead Time: 2.34 s
-        Time Constant (Tau): 8.67 s
+step PWM  = target x 8, kept within 60-200
+start PWM = round(0.6 x step PWM)
 ```
 
-### Troubleshooting sTune
+| Target | Step (start PWM -> step PWM) |
+|---|---|
+| 2 m/s | 36 -> 60 |
+| 10 m/s | 48 -> 80 |
+| 20 m/s | 96 -> 160 |
+| 25 m/s or more | 120 -> 200 |
 
-**Problem: Tuning times out**
-- Increase test time estimate in code
-- Check motor/fan responds to PWM
-- Verify sensors are working
-- Ensure target is achievable
+The test has two phases:
 
-**Problem: Poor gains**
-- System may not have S-curve response
-- Try increasing output step size
-- Use relay tuning instead
-- Check for mechanical issues
+1. **SETTLING:** the fan holds the start PWM for 25 s. Then every run starts from a steady airspeed.
+2. **TESTING:** the PWM steps to the step PWM. The test ends when sTune finds the inflection point, or after 15 s (75 samples, one per 200 ms).
 
-**Problem: Error during tuning**
-- Target too low (must be ≥2 m/s)
-- Emergency stop triggered
-- Sensor malfunction
-- Review serial output for details
+In simulation at 10 m/s, a complete run took 27 s.
+The steps do not use the PWM rate limit.
+During the test, the data lines show the phase, for example:
 
-### Customizing sTune Parameters
-
-Advanced users can modify parameters in `STunePIDTuner.cpp`:
-
-```cpp
-// Change tuning method (in constructor)
-_tuner = new sTune(input, output, 
-                   sTune::ZN_PID,        // Try different method
-                   sTune::directIP,      // Or direct5T for full test
-                   sTune::printSUMMARY);
-
-// Adjust in startTuning() call
-tuner->startTuning(
-    setpoint,     // Target speed
-    30.0,         // Input span (max airspeed)
-    255.0,        // Output span (PWM range)
-    0.0,          // Output start
-    100.0,        // Output step (adjust for system)
-    60,           // Test time estimate (seconds)
-    5,            // Settle time (seconds)
-    300           // Number of samples
-);
+```
+[sTune] SETTLING | V:9.97 | SP:10.00 | PWM:48 | P:59.88 | Temp:20.0 | Err:0.03
+[sTune] TESTING | V:5.65 | SP:10.00 | PWM:80 | P:19.23 | Temp:20.0 | Err:4.35
 ```
 
-### References
+### Unit conversion
 
-- [sTune GitHub Repository](https://github.com/Dlloydev/sTune)
-- [sTune Wiki](https://github.com/Dlloydev/sTune/wiki)
-- [Inflection Point Method](https://en.wikipedia.org/wiki/Inflection_point)
+sTune gives Kp per unit of span, and 1/Ti and 1/Td. QuickPID needs gains in PWM and m/s.
+The firmware converts them (input span 28.0 m/s, output span 255 PWM):
+
+```
+Kp = Kp(sTune) x 255 / 28.0      PWM per m/s
+Ki = Kp x (1/Ti)                 = Kp / Ti
+Kd = Kp / (1/Td)                 = Kp x Td   (0 for PI rules)
+```
+
+The report shows the process gain in m/s per PWM, the dead time and the time constant (Tau).
+Example from the simulation:
+
+```
+=====================================
+[sTune] AUTOTUNING COMPLETE
+=====================================
+[sTune] Duration: 27 seconds
+[sTune] Process model from the step response:
+        Process gain: 0.0953 m/s per PWM
+        Dead time: 0.80 s
+        Time constant (Tau): 4.42 s
+[sTune] PID gains (Mixed PID):
+        Kp = 29.6671
+        Ki = 16.1840
+        Kd = 11.2095
+=====================================
+
+[PID] Gains set: Kp=29.667 Ki=16.184 Kd=11.210
+[TUNE] PID running at target 10.00 m/s with the new gains
+[TUNE] To reuse these gains later: tune 29.667 16.184 11.210
+=====================================
+```
+
+### Rejection
+
+The firmware uses the result only if all these values are finite and:
+
+- Kp > 0, Ki > 0 and Kd >= 0
+- Tau > 0, dead time > 0 and process gain > 0
+
+If not, the tune stops with the reason `sTune found no usable step response`. The report then shows `[sTune] NO USABLE STEP RESPONSE`.
+This occurs when the airspeed does not rise clearly after the step.
+Check the fan power, the PWM wiring and the pitot tubes, or set a higher target (larger step). Then try again.
+
+### Emergency stop and other aborts
+
+- **Emergency stop:** the firmware checks the airspeed during both phases. Above 28.0 m/s (`MAX_AIRSPEED`) it stops the fan with the reason `airspeed above MAX_AIRSPEED`, then prints `[sTune] ABORT: airspeed <V> m/s above the limit of 28.00 m/s`.
+  The emergency stop of the sTune library is not used, because it latches and only holds the fan at the start PWM.
+- **Timeout:** after 60 s ((25 s + 15 s) x 1.5) the tune stops with the reason `sTune timeout`. This occurs only if the update loop runs much too slowly. Look for `[WARN] Update pass took ...` messages and check the I2C wiring.
+- **Sensor:** 5 invalid pressure readings in a row stop the tune (`no valid pressure data`).
+- **Stop:** `0` or `stop` stops the tune (`stopped by user`). There is no sTune report.
+
+NOTE: The no-airflow check does not run during sTune.
+
+### Hand-over
+
+After a successful tune, the firmware applies the gains (clamped to the limits).
+The PID controller continues at the same target from the step PWM.
+
+### Settings
+
+The sTune settings are in the Settings section of `EDU-Wind-Tunnel.ino`. `startSTune()` gives them to the tuner.
+
+| Name | Default | Meaning |
+|---|---|---|
+| `STUNE_METHOD` | `sTune::Mixed_PID` | Tuning rule. The code comment above it lists the other rules. |
+| `STUNE_TEST_TIME_S` | 15 | Test time (s). Keep it close to the time constant of the fan. |
+| `STUNE_SETTLE_TIME_S` | 25 | Time at the start PWM before the step (s). |
+| `STUNE_START_FRACTION` | 0.6 | Start PWM as a fraction of the step PWM. |
+| `STUNE_STEP_PWM_MIN`, `STUNE_STEP_PWM_MAX` | 60, 200 | Limits of the step PWM. |
+| `FAN_PWM_PER_MPS_ESTIMATE` | 8.0 | PWM per m/s estimate. Both auto-tunes use it. |
+
+NOTE: In simulation, a test time of 10 s underestimated slow fans and the tuned loop oscillated.
+
+NOTE: The PI rules (for example `sTune::Mixed_PI`) give Kd = 0. The firmware then clamps Kd to 0.1 and prints `[PID] Kd = 0.000 is outside 0.1-50.0, clamped to 0.100`.
+
+CAUTION: sTune results can be aggressive on fast fans or fans with a high gain. After each tune, test the loop with small target steps.
 
 ---
 
-## Conclusion
+## Troubleshooting by symptom
+
+| Symptom | Possible cause | Action |
+|---|---|---|
+| The airspeed oscillates around the target and does not settle. | The gains are too high for this fan, or the averaging delay is too long. | Reduce Kp and Ki by about 20 % (from the defaults: `tune 20 8 15`). If you increased `avg`, type `avg 5`. Then run `tune` or `stune` again. |
+| The airspeed overshoots after a target change, then settles. | Ki is too high for the present Kp. | Reduce Ki (`tune 25 8 15`), or increase Kp a little. |
+| The airspeed moves slowly to a new target, with no overshoot. | Ki is too low. With P on measurement, Ki moves the fan to a new target. | Increase Ki in small steps (`tune 25 12 15`). For large steps, the rate limit also adds time: 0 to 255 takes 2.2 s. |
+| The PWM value jumps from line to line at a steady target. The fan sound changes. | Kd amplifies the sensor noise. | Reduce Kd (`tune 25 10 8`). Check the pitot tubes. Type `recal` to set the sensor zero again (this stops the fan). |
+| The PWM value stays at 255 and the airspeed stays below the target. | The fan cannot give this airspeed. | Set a lower target. The running sum stays inside 0-255, so the loop recovers without a long overshoot. |
+| The fan stops with `[ERROR] No airflow measured at full fan power - check the pitot tubes and the fan`. | The airspeed stayed below 1.0 m/s at PWM 250 or more for 15 s in total. | Make sure that the pitot tubes are connected to the correct ports. Check the fan power and the PWM wiring. |
+| The loop overshoots or oscillates after an auto-tune. | The tuner result is too aggressive for this fan. | Reduce Kp and Ki by about 20 %. Or try the other auto-tune. |
+| The relay tune stops with `relay tune timeout`. | The two PWM levels do not bracket the target. | Give the range by hand (see [Relay auto-tune](#relay-auto-tune-tune)). |
+| sTune stops with `[sTune] NO USABLE STEP RESPONSE`. | The airspeed did not rise clearly after the step. | Check the fan and the pitot tubes. Set a higher target. Or use `tune`. |
+| sTune stops with `sTune timeout`. | The update loop ran too slowly. | Look for `[WARN] Update pass took ...`. Check the I2C wiring (long cables, loose connectors). |
+
+---
+
+## Gain-effect reference
+
+The firmware uses P and D on measurement. This changes the usual table for target changes.
+
+| Gain | Increase | Too high | Too low |
+|---|---|---|---|
+| Kp | Faster correction of disturbances. More damping after a target change. | Oscillation. | Slow correction of disturbances. More overshoot after a target change. |
+| Ki | Faster move to a new target. Removes the remaining error faster. | Overshoot, slow oscillation. | Slow move to a new target. The error stays longer. |
+| Kd | More damping of fast airspeed changes. | PWM value jumps with the sensor noise. The loop can oscillate. | Less damping, more overshoot. |
+
+---
+
+## References
+
+- [QuickPID](https://github.com/Dlloydev/QuickPID) (David Lloyd)
+- [sTune](https://github.com/Dlloydev/sTune) and the [sTune wiki](https://github.com/Dlloydev/sTune/wiki) (David Lloyd)

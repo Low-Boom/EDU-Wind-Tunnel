@@ -1,0 +1,62 @@
+# Compile the firmware for every supported board on each push and pull request.
+# A board that is not in this list is not supported (PlatformConfig.h stops the build with #error).
+name: Compile sketch
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    name: ${{ matrix.board.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board:
+          - name: ESP32-P4 (chip before v3.0)
+            fqbn: esp32:esp32:esp32p4
+            platforms: |
+              - name: esp32:esp32
+                source-url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+                version: 3.3.12
+          - name: ESP32-P4 (chip v3.0 or newer)
+            fqbn: esp32:esp32:esp32p4:ChipVariant=postv3
+            platforms: |
+              - name: esp32:esp32
+                source-url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+                version: 3.3.12
+          - name: Uno R4 Minima
+            fqbn: arduino:renesas_uno:minima
+            platforms: |
+              - name: arduino:renesas_uno
+                version: 1.6.0
+          - name: Uno R4 WiFi
+            fqbn: arduino:renesas_uno:unor4wifi
+            platforms: |
+              - name: arduino:renesas_uno
+                version: 1.6.0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/compile-sketches@v1
+        with:
+          fqbn: ${{ matrix.board.fqbn }}
+          platforms: ${{ matrix.board.platforms }}
+          sketch-paths: |
+            - EDU-Wind-Tunnel
+          # Same library versions as platformio.ini and THIRD_PARTY_LICENSES.md (git tags).
+          libraries: |
+            - source-url: https://github.com/Dlloydev/QuickPID.git
+              version: 3.1.9
+            - source-url: https://github.com/Dlloydev/sTune.git
+              version: 2.4.0
+            - source-url: https://github.com/DFRobot/DFRobot_LWLP.git
+              version: V1.0.0
+            - source-url: https://github.com/DFRobot/DFRobot_RTU.git
+              version: V1.0.6
+            - source-url: https://github.com/DFRobot/DFRobot_BMP58X.git
+              version: v1.0.1
+          enable-warnings-report: true
