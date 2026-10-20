@@ -270,20 +270,26 @@ void setup() {
     // QuickPID runs in timer mode: it computes on every call and uses the
     // configured sample time for the I and D scaling.
     // P and D on measurement: a setpoint step does not kick the output.
-    // Conditional anti-windup: the integral stops growing while saturated.
+    // Anti-windup by clamping: QuickPID keeps its running sum (the integral
+    // and the P-on-measurement part) inside the output limits. Not
+    // iAwCondition: in QuickPID 3.1.9 that mode compares a one-sample step
+    // with the absolute output limits, fires on most updates in which the
+    // airspeed rises, and then adds the P-on-measurement step twice (and the
+    // I step times 1 + Ki x interval), so the loop is much more aggressive
+    // upwards than downwards.
     // The output limits stay at the full PWM range; the rate limit acts on
     // the fan after Compute() (see runPidControl()).
     myPID.SetOutputLimits(0, 255);
     myPID.SetSampleTimeUs(UPDATE_INTERVAL_MS * 1000);
     myPID.SetTunings(kp, ki, kd, QuickPID::pMode::pOnMeas, QuickPID::dMode::dOnMeas,
-                     QuickPID::iAwMode::iAwCondition);
+                     QuickPID::iAwMode::iAwClamp);
     pidBumplessStart();
     Serial.println("[INIT] QuickPID controller... OK");
     Serial.print("        Update interval: "); Serial.print(UPDATE_INTERVAL_MS); Serial.println(" ms");
     Serial.print("        Kp="); Serial.print(kp, 1);
     Serial.print(", Ki="); Serial.print(ki, 1);
     Serial.print(", Kd="); Serial.println(kd, 1);
-    Serial.println("        P and D on measurement, conditional anti-windup");
+    Serial.println("        P and D on measurement, anti-windup by clamping");
     Serial.print("        PWM rate limit: +/-"); Serial.print(MAX_PWM_CHANGE_PER_CYCLE);
     Serial.println(" per update");
 
