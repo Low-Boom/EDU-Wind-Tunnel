@@ -89,8 +89,13 @@ const unsigned long RELAY_TIMEOUT_MS = 120000;
 //   sTune::Mixed_PID       Average of the four rules above (used here)
 // PI versions: ZN_PI, DampedOsc_PI, NoOvershoot_PI, CohenCoon_PI, Mixed_PI
 const sTune::TuningMethod STUNE_METHOD = sTune::Mixed_PID;
-const uint32_t STUNE_TEST_TIME_S = 60;
-const uint16_t STUNE_SAMPLES = 300;      // 60 s / 300 = one sample per 200 ms
+// Test time: sTune's model scales with it (its tangent window is 6 % of the
+// samples), so it must be close to the fan's time constant. On the harness
+// plant grid (time constant incl. averaging 1.7-5.2 s) 15 s identified tau
+// within -51..+171 % (60 s: +309..+1071 %) with the same closed-loop result;
+// 10 s underestimated slow fans by up to 79 % and the tuned loop oscillated.
+const uint32_t STUNE_TEST_TIME_S = 15;
+const uint16_t STUNE_SAMPLES = 75;       // 15 s / 75 = one sample per 200 ms
 // The step goes from STUNE_START_FRACTION x step PWM to the step PWM. The fan
 // holds the start PWM for STUNE_SETTLE_TIME_S first, long enough to reach it
 // from any earlier state (also from full speed: fans run down slowly).
