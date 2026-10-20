@@ -27,10 +27,14 @@ STunePIDTuner::STunePIDTuner(float *input, float *output, sTune::TuningMethod tu
       _outputStep(100.0),
       _testTimeSec(60),
       _settleTimeSec(5),
-      _samples(300) {
+      _samples(300),
+      _eStop(0.0) {
     
-    // Create sTune instance with selected tuning method
+    // Create sTune instance with selected tuning method. Its constructor
+    // writes an uninitialised start value to *output, so keep the caller's.
+    float savedOutput = *output;
     _tuner = new sTune(input, output, _tuningMethod, sTune::directIP, sTune::printSUMMARY);
+    *output = savedOutput;
 }
 
 STunePIDTuner::~STunePIDTuner() {
@@ -67,9 +71,13 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     _ki = 0.0;
     _kd = 0.0;
     
-    // Configure sTune
+    // Configure sTune. Configure() resets the emergency stop to inputSpan,
+    // so apply the user's limit again afterwards.
     _tuner->Configure(inputSpan, outputSpan, outputStart, outputStep, 
                       testTimeSec, settleTimeSec, samples);
+    if (_eStop > 0.0) {
+        _tuner->SetEmergencyStop(_eStop);
+    }
     
     // Calculate timeout: settle time + test time + 50% margin
     _timeout = (settleTimeSec + testTimeSec) * 1500; // milliseconds
@@ -114,20 +122,20 @@ STunePIDTuner::TuningStatus STunePIDTuner::update() {
         }
     }
 
+    // sTune returns "sample" while settling too, so the switch to TESTING is
+    // based on the configured settle time, not on the first sample.
+    if (_status == SETTLING && millis() - _startTime >= _settleTimeSec * 1000UL) {
+        _status = TESTING;
+        Serial.println("[sTune] Settling complete - starting test");
+        Serial.println("[sTune] Monitoring inflection point...");
+    }
+
     // Run sTune state machine
     if (_status == SETTLING || _status == TESTING) {
         uint8_t tuneResult = _tuner->Run();
         
         switch (tuneResult) {
-            case sTune::sample:
-                // Active sampling during test
-                if (_status == SETTLING) {
-                    _status = TESTING;
-                    Serial.println("[sTune] Settling complete - starting test");
-                    Serial.println("[sTune] Monitoring inflection point...");
-                }
-                break;
-                
+
             case sTune::tunings: {
                 // Tuning completed successfully
                 _tuner->GetAutoTunings(&_kp, &_ki, &_kd);
@@ -205,6 +213,7 @@ const char* STunePIDTuner::getStatusString() const {
 }
 
 void STunePIDTuner::setEmergencyStop(float limit) {
+    _eStop = limit;   // remembered: startTuning() re-applies it after Configure()
     if (_tuner != nullptr) {
         _tuner->SetEmergencyStop(limit);
     }

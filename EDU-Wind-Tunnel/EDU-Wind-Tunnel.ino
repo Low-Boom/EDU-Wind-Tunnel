@@ -66,8 +66,11 @@ const unsigned long CALIB_SAMPLE_SPACING_MS = 100;
 const int MIN_CALIB_SAMPLES = 5;
 const int MAX_CALIB_SAMPLES = 100;
 
-// Sensor oversampling configuration
-const int PRESSURE_OVERSAMPLES = 5;  // Read sensor 5 times per measurement
+// Sensor oversampling: readings per update. Each LWLP read blocks for about
+// 60 ms (the library waits for the conversion), so more than one read would
+// not fit into the 200 ms update interval; the moving average does the
+// smoothing instead.
+const int PRESSURE_OVERSAMPLES = 1;
 
 // Pressure sensor averaging configuration
 int pressureAverageSamples = 20;  // Default: 20 samples
@@ -85,6 +88,8 @@ float lastTemperature = 15.0;  // Cache for display
 // Timing
 const unsigned long updateInterval = 200;  // 200ms update interval
 unsigned long lastUpdate = 0;
+unsigned long lastSlowPassWarning = 0;
+const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;
 unsigned long startTime = 0;
 
 unsigned int LastValidRPM = 0;
@@ -162,6 +167,7 @@ void abortTuning(const char *reason);
 void runPidControl();
 void printDataLine(unsigned long now, float pressure);
 void printHelp();
+void warnIfSlowPass(unsigned long passMs);
 void calibratePressureSensor(int numSamples);
 float readPressureRaw();
 float readPressureCorrected();
@@ -264,15 +270,16 @@ void setup() {
 
     // Configure QuickPID for full PID control
     Serial.print("[INIT] QuickPID Controller (Full PID)...");
-    myPID.SetTunings(Kp, Ki, Kd);
+    // loop() calls Compute() exactly once per update interval, so QuickPID
+    // runs in timer mode: it computes on every call, using the configured
+    // sample time for the I and D scaling.
     myPID.SetOutputLimits(0, 255);
     myPID.SetSampleTimeUs(updateInterval * 1000);
-    myPID.SetMode(QuickPID::Control::automatic);
-    
-    // OPTIMIZED SETTINGS FOR LAGGY SYSTEMS - Full PID
-    myPID.SetProportionalMode(QuickPID::pMode::pOnMeas);      // P on Measurement
-    myPID.SetDerivativeMode(QuickPID::dMode::dOnMeas);        // D on Measurement
-    myPID.SetAntiWindupMode(QuickPID::iAwMode::iAwCondition); // Conditional integration
+    // P and D on measurement: a setpoint step does not kick the output.
+    // Conditional anti-windup: the integral stops growing while saturated.
+    myPID.SetTunings(Kp, Ki, Kd, QuickPID::pMode::pOnMeas, QuickPID::dMode::dOnMeas,
+                     QuickPID::iAwMode::iAwCondition);
+    pidBumplessStart();
     
     Serial.println(" OK");
     Serial.print("        Update Rate: "); Serial.print(updateInterval); Serial.println(" ms");
@@ -313,6 +320,10 @@ void setup() {
 }
 
 void loop() {
+    // sTune keeps its own sample timing and needs two Run() calls per
+    // processed sample, so it is serviced on every pass, not only every 200 ms.
+    if (controlMode == MODE_STUNE) runSTune();
+
     unsigned long now = millis();
     if (now - lastUpdate < updateInterval) return;
     lastUpdate = now;
@@ -325,7 +336,9 @@ void loop() {
 
     // 2. User commands, accepted in every mode (stop must always work)
     ControlMode modeBeforeCommands = controlMode;
+    unsigned long commandStart = millis();
     pollSerialCommands();
+    unsigned long commandTime = millis() - commandStart;   // e.g. recal blocks on purpose
 
     // 3. Control. If a command just started or ended a tune, the new mode has
     //    already set the fan; let it begin cleanly on the next pass instead of
@@ -334,11 +347,24 @@ void loop() {
         switch (controlMode) {
             case MODE_PID:        runPidControl(); break;
             case MODE_RELAY_TUNE: runRelayTune();  break;
-            case MODE_STUNE:      runSTune();      break;
+            case MODE_STUNE:      break;             // serviced at the top of loop()
         }
     }
 
     printDataLine(now, currPressure);
+    warnIfSlowPass(millis() - now - commandTime);
+}
+
+// The PID assumes one Compute() per update interval. If a pass takes longer
+// (slow sensor, long serial output) the loop runs slower than configured, so
+// say so - at most every 10 s to keep the data stream readable.
+void warnIfSlowPass(unsigned long passMs) {
+    if (passMs <= updateInterval) return;
+    if (millis() - lastSlowPassWarning < SLOW_PASS_WARNING_INTERVAL_MS) return;
+    lastSlowPassWarning = millis();
+    Serial.print("[WARN] Update pass took "); Serial.print(passMs);
+    Serial.print(" ms (interval "); Serial.print(updateInterval);
+    Serial.println(" ms) - control runs slower than configured");
 }
 
 // Normal closed-loop operation: PID output with a PWM slew-rate limit.
@@ -678,8 +704,9 @@ void setPressureAverageSamples(int samples) {
         if (pressureAverageSamples == 1) {
             Serial.println("         (No averaging - raw oversampled readings)");
         } else {
+            // A plain N-sample average delays the signal by (N-1)/2 samples
             Serial.print("         Effective lag: ~");
-            Serial.print(pressureAverageSamples * updateInterval);
+            Serial.print((pressureAverageSamples - 1) * updateInterval / 2);
             Serial.println(" ms");
         }
     }
@@ -1020,13 +1047,13 @@ void stopFan() {
     pidBumplessStart();
 }
 
-// Hand the fan to the PID without a bump. Switching QuickPID from manual back
-// to automatic runs its Initialize(): the integral starts at the present
+// Hand the fan to the PID without a bump. Switching QuickPID from manual to
+// timer mode runs its Initialize(): the integral starts at the present
 // output (currPWM) and the derivative at the present airspeed, so the first
 // Compute() continues smoothly from where the fan is now.
 void pidBumplessStart() {
     myPID.SetMode(QuickPID::Control::manual);
-    myPID.SetMode(QuickPID::Control::automatic);
+    myPID.SetMode(QuickPID::Control::timer);
 }
 
 // End a running relay tune or sTune without applying any gains.
@@ -1163,12 +1190,17 @@ void startSTune() {
     }
 }
 
+// sTune step test, called on every loop() pass. sTune sets currPWM through
+// the pointer it was given; write it to the fan only when it changes, since
+// this runs thousands of times per second.
 void runSTune() {
-    // Update sTune state machine
     STunePIDTuner::TuningStatus status = sTuner->update();
-    
-    // Write PWM output (sTuner manages the output value via currPWM pointer)
-    analogWrite(PWM_pin, (int)round(currPWM));
+
+    int pwm = constrain((int)round(currPWM), 0, 255);
+    if (pwm != lastPWMOutput) {
+        analogWrite(PWM_pin, pwm);
+        lastPWMOutput = pwm;
+    }
     
     if (status == STunePIDTuner::COMPLETED) {
         // Get tuned gains and apply to PID

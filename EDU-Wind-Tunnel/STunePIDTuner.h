@@ -145,6 +145,7 @@ private:
     uint32_t _testTimeSec;
     uint32_t _settleTimeSec;
     uint16_t _samples;
+    float _eStop;               // emergency stop limit (0 = sTune default: inputSpan)
 };
 
 #endif // STUNE_PID_TUNER_H
