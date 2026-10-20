@@ -53,7 +53,8 @@ const int PRESSURE_OVERSAMPLES = 1;
 // 5 samples = 1 s window, mean delay 0.4 s. Longer windows add delay inside the
 // control loop: in simulation, 20 samples (mean delay 1.9 s) made the default
 // gains oscillate on 3 of 5 fan models, while 5 samples was stable on 4 of 5.
-// Use a longer window only for smoother readings with the fan held at a fixed PWM.
+// A longer window ('avg <N>') gives smoother readings but slows the control loop
+// and can make it oscillate; lower the gains if you use one.
 const int DEFAULT_AVG_SAMPLES = 5;
 const int MIN_AVG_SAMPLES = 1;
 const int MAX_AVG_SAMPLES = 50;
