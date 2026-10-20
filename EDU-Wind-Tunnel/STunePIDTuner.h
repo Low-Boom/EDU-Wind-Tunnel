@@ -49,8 +49,10 @@ public:
      * @param setpoint Target airspeed for tuning
      * @param inputSpan Maximum input range (e.g., 30.0 m/s)
      * @param outputSpan Maximum output range (e.g., 255 for PWM)
-     * @param outputStart Initial output value before step
-     * @param outputStep Step change in output for test
+     * @param outputStart Output held while settling, before the step (PWM)
+     * @param outputStep Output during the step (PWM): the step goes from
+     *                   outputStart to outputStep (sTune's name; it is not
+     *                   the size of the step)
      * @param testTimeSec Estimated test duration (seconds)
      * @param settleTimeSec Settling time before test (seconds)
      * @param samples Number of samples for test

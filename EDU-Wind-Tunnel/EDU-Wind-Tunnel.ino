@@ -513,10 +513,13 @@ void resetPressureAverage() {
 }
 
 // avg <N>: longer averages give a calmer reading but a slower response.
+// The command is always confirmed; only a new length restarts the average
+// (the buffer holds the old number of samples).
 void setPressureAverageSamples(int samples) {
-    if (samples == pressureAverageSamples) return;
-    pressureAverageSamples = samples;
-    resetPressureAverage();
+    if (samples != pressureAverageSamples) {
+        pressureAverageSamples = samples;
+        resetPressureAverage();
+    }
 
     Serial.print("[CONFIG] Pressure averaging set to ");
     Serial.print(pressureAverageSamples);
@@ -977,7 +980,8 @@ void completeRelayTune() {
 void startSTune() {
     if (!tuneTargetOk()) return;
 
-    // Step size: rough PWM needed for the target, kept in a range that gives
+    // Step PWM: sTune's "outputStep" is the PWM during the step, not the size
+    // of the step. Rough PWM needed for the target, kept in a range that gives
     // a clear response without running the fan flat out.
     float outputStep = constrain(desiredAirSpeed * 8.0, 60.0, 200.0);
 

@@ -134,8 +134,8 @@ bool STunePIDTuner::startTuning(float setpoint, float inputSpan, float outputSpa
     Serial.println("\n[sTune] Configuration:");
     Serial.print("        Input span: "); Serial.print(inputSpan, 1); Serial.println(" m/s");
     Serial.print("        Output span: "); Serial.print(outputSpan, 0); Serial.println(" PWM");
-    Serial.print("        Output start: "); Serial.print(outputStart, 0); Serial.println(" PWM");
-    Serial.print("        Output step: "); Serial.print(outputStep, 0); Serial.println(" PWM");
+    Serial.print("        Step: "); Serial.print(outputStart, 0); Serial.print(" -> ");
+    Serial.print(outputStep, 0); Serial.println(" PWM");
     Serial.print("        Test time: "); Serial.print(testTimeSec); Serial.println(" sec");
     Serial.print("        Settle time: "); Serial.print(settleTimeSec); Serial.println(" sec");
     Serial.print("        Samples: "); Serial.println(samples);
