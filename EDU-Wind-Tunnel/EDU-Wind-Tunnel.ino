@@ -50,7 +50,11 @@ const unsigned long UPDATE_INTERVAL_MS = 200;
 const int PRESSURE_OVERSAMPLES = 1;
 
 // Moving average of the pressure (command: avg <N>)
-const int DEFAULT_AVG_SAMPLES = 20;
+// 5 samples = 1 s window, mean delay 0.4 s. Longer windows add delay inside the
+// control loop: in simulation, 20 samples (mean delay 1.9 s) made the default
+// gains oscillate on 3 of 5 fan models, while 5 samples was stable on 4 of 5.
+// Use a longer window only for smoother readings with the fan held at a fixed PWM.
+const int DEFAULT_AVG_SAMPLES = 5;
 const int MIN_AVG_SAMPLES = 1;
 const int MAX_AVG_SAMPLES = 50;
 
