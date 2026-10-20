@@ -41,6 +41,13 @@ float Kp = 25.0, Ki = 10.0, Kd = 15.0;
 // Pin assignments (platform defaults set in PlatformConfig.h – edit there to change)
 const int PWM_pin  = DEFAULT_PWM_PIN;    // Motor PWM control output
 const int TACH_pin = DEFAULT_TACH_PIN;   // Tachometer pulse input
+
+// Status LED used to signal a fatal error (-1 = board has no simple LED)
+#ifdef LED_BUILTIN
+const int STATUS_LED_PIN = LED_BUILTIN;
+#else
+const int STATUS_LED_PIN = -1;
+#endif
 const int ENC_PPR = 2;
 const float kI = 1;
 
@@ -127,6 +134,7 @@ STunePIDTuner *sTuner = nullptr;
 bool sTuneActive = false;
 
 // Forward declarations
+void haltWithError(const char *msg);
 void OnTachPulse();
 void initializeBarometer();
 void checkForUserAirspeedUpdate();
@@ -155,6 +163,15 @@ unsigned long PrevPulseInterval = 0;
 bool changed = false;
 
 void setup() {
+    // Drive the fan off before anything else: until pinMode() runs the PWM pin
+    // floats and some fan drivers read a floating input as "full speed".
+    pinMode(PWM_pin, OUTPUT);
+    digitalWrite(PWM_pin, LOW);
+    if (STATUS_LED_PIN >= 0) {
+        pinMode(STATUS_LED_PIN, OUTPUT);
+        digitalWrite(STATUS_LED_PIN, LOW);
+    }
+
     Serial.begin(115200);
     delay(2000);
     
@@ -197,10 +214,7 @@ void setup() {
         Serial.println(" FAILED!");
         Serial.println("[ERROR] Cannot communicate with differential pressure sensor");
         Serial.println("[ERROR] Check SEN0343 connections to Wire (SDA/SCL)");
-        while (1) {
-            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-            delay(200);
-        }
+        haltWithError("Differential pressure sensor not responding");
     }
     Serial.println(" OK");
     Serial.print("        Oversampling: "); Serial.print(PRESSURE_OVERSAMPLES); 
@@ -221,7 +235,6 @@ void setup() {
     analogWrite(PWM_pin, 0);  // Start at 0
     
     pinMode(TACH_pin, INPUT_PULLUP);
-    pinMode(LED_BUILTIN, OUTPUT);
     attachInterrupt(digitalPinToInterrupt(TACH_pin), OnTachPulse, FALLING);
     
     Serial.println("        OK");
@@ -1051,10 +1064,7 @@ void initializeBarometer() {
         Serial.println(" NOT FOUND!");
         Serial.println("[ERROR] BMP585 not found at 0x47 or 0x46 on any bus");
         Serial.println("[ERROR] Check SEN0665 sensor connections");
-        while (1) {
-            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-            delay(500);
-        }
+        haltWithError("Barometer not found");
     }
     
     Serial.print(" (found on "); Serial.print(bmpBusName); Serial.print(")");
@@ -1072,10 +1082,7 @@ void initializeBarometer() {
             Serial.println("[ERROR] BMP585 found in scan but cannot initialize");
             Serial.print("[ERROR] Check connections on ");
             Serial.println(bmpBusName);
-            while (1) {
-                digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-                delay(500);
-            }
+            haltWithError("Barometer found but not responding");
         }
         Serial.println(" OK (0x46)");
     } else {
@@ -1159,5 +1166,24 @@ void runSTune() {
         currPWM = 0;
         analogWrite(PWM_pin, 0);
         lastPWMOutput = 0;
+    }
+}
+
+// Fatal error: keep the fan off and stop here for good. Blinking the status
+// LED (if the board has one) shows the fault even without a serial monitor.
+// The sketch never continues, because running the fan without valid sensor
+// data would mean running it without control.
+void haltWithError(const char *msg) {
+    analogWrite(PWM_pin, 0);
+    Serial.print("[FATAL] ");
+    Serial.println(msg);
+    Serial.println("[FATAL] System halted with the fan off. Fix the fault and reset the board.");
+    bool ledOn = false;
+    while (true) {
+        if (STATUS_LED_PIN >= 0) {
+            ledOn = !ledOn;
+            digitalWrite(STATUS_LED_PIN, ledOn ? HIGH : LOW);
+        }
+        delay(250);
     }
 }
