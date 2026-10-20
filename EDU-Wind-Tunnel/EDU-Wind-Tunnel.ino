@@ -99,9 +99,20 @@ float currPWM = 0;
 float desiredAirSpeed = 0;
 float currentAirSpeed = 0;
 
+// What loop() does with the fan: closed-loop PID or one of the auto-tuners.
+// Only one mode is active at a time, so tuning and PID never fight over PWM.
+enum ControlMode { MODE_PID, MODE_RELAY_TUNE, MODE_STUNE };
+ControlMode controlMode = MODE_PID;
+
+// Serial command input: one line is collected without blocking loop()
+const size_t SERIAL_LINE_SIZE = 64;   // buffer size incl. the terminating '\0'
+char serialLine[SERIAL_LINE_SIZE];
+size_t serialLineLength = 0;
+bool serialLineTooLong = false;
+const int MAX_COMMAND_WORDS = 4;      // longest command: tune <Kp> <Ki> <Kd>
+
 // Relay Auto-tuning configuration
 const float MIN_TUNE_SETPOINT = 2.0;
-bool autoTuning = false;
 float tuneSetpoint = 0.0;
 uint32_t tuneStartTime = 0;
 
@@ -131,13 +142,25 @@ unsigned long debugCounter = 0;
 
 // sTune autotuning (optional alternative to relay tuning)
 STunePIDTuner *sTuner = nullptr;
-bool sTuneActive = false;
 
 // Forward declarations
 void haltWithError(const char *msg);
 void OnTachPulse();
 void initializeBarometer();
-void checkForUserAirspeedUpdate();
+void pollSerialCommands();
+void handleCommand(char *line);
+int splitWords(char *line, char *words[], int maxWords);
+bool wordIs(const char *word, const char *keyword);
+bool parseDecimal(const char *text, float &value);
+bool parseWholeNumber(const char *text, int minValue, int maxValue, int &value);
+void setTargetAirspeed(float target);
+void setManualGains(const char *kpText, const char *kiText, const char *kdText);
+void stopFan();
+void pidBumplessStart();
+void abortTuning(const char *reason);
+void runPidControl();
+void printDataLine(unsigned long now, float pressure);
+void printHelp();
 void calibratePressureSensor(bool skipWait = false, int numSamples = -1);
 float readPressureSensorRawUncalibrated();
 float readPressureSensorRaw();
@@ -287,47 +310,7 @@ void setup() {
     Serial.print("  PWM Output: Pin "); Serial.println(PWM_pin);
     Serial.print("  Tachometer: Pin "); Serial.println(TACH_pin);
     Serial.println("");
-    Serial.println("CONTROL:");
-    Serial.println("  Type airspeed value (m/s) to set target");
-    Serial.println("  Example: '10' sets target to 10 m/s");
-    Serial.println("");
-    Serial.println("COMMANDS:");
-    Serial.println("  tune                    - Auto PWM range");
-    Serial.println("  tune <low> <high>       - Manual PWM range");
-    Serial.println("    Example: 'tune 40 100'");
-    Serial.println("  tune <Kp> <Ki> <Kd>     - Manual PID gains");
-    Serial.println("    Example: 'tune 20 8 12'");
-    Serial.println("  recal [N]               - Recalibrate sensor");
-    Serial.println("  avg N                   - Set averaging samples");
-    Serial.println("  stune                   - sTune autotuning (advanced)");
-    Serial.println("");
-    Serial.println("AUTO-TUNE:");
-    Serial.println("  Method: Relay + Aggressive Tuning Rules");
-    Serial.println("  Tuning: 'Some Overshoot' for fast response");
-    Serial.println("  1. Set target airspeed (min 2 m/s)");
-    Serial.println("  2. Type 'tune' or 'tune <low> <high>'");
-    Serial.println("  3. System oscillates 3-4 cycles");
-    Serial.println("  4. Aggressive PID gains calculated");
-    Serial.println("  Duration: ~30-60 seconds");
-    Serial.println("  Tip: Start conservative (e.g., tune 40 100)");
-    Serial.println("");
-    Serial.println("STUNE AUTO-TUNE (ADVANCED):");
-    Serial.println("  Method: Inflection Point (Set Mode at Compile)");
-    Serial.println("  Tuning: Stable response, minimal overshoot");
-    Serial.println("  1. Set target airspeed (min 2 m/s)");
-    Serial.println("  2. Type 'stune'");
-    Serial.println("  3. System applies step and monitors response");
-    Serial.println("  4. Conservative PID gains calculated");
-    Serial.println("  Duration: ~30-60 seconds");
-    Serial.println("  Benefits: More stable than relay tuning");
-    Serial.println("");
-    Serial.println("MANUAL TUNING:");
-    Serial.println("  tune <Kp> <Ki> <Kd> - Directly set gains");
-    Serial.println("  Example: tune 20 8 12");
-    Serial.println("  Ranges: Kp(1-100), Ki(0.1-50), Kd(0.1-50)");
-    Serial.println("");
-    Serial.println("DATA FORMAT:");
-    Serial.println("  T(s) | V | Target | PWM | P(Pa) | Temp(°C) | Err");
+    printHelp();
     Serial.println("=====================================\n");
     
     lastUpdate = millis();
@@ -335,72 +318,88 @@ void setup() {
 
 void loop() {
     unsigned long now = millis();
-    
-    if (now - lastUpdate >= updateInterval) {
-        lastUpdate = now;
-        debugCounter++;
-        
-        // Read sensors with advanced processing
-        float currPressure = readPressureSensorAveraged();   // Oversampled + Averaged
-        float currAirDensity = readBarometerSensor();        // Temperature compensated
-        currentAirSpeed = calcCurrentAirSpeed(currPressure, currAirDensity);
+    if (now - lastUpdate < updateInterval) return;
+    lastUpdate = now;
+    debugCounter++;
 
-        if (sTuneActive) {
-            // sTune autotuning mode
-            runSTune();
-        } else if (!autoTuning) {
-            checkForUserAirspeedUpdate();
-            
-            // Normal PID control
-            myPID.Compute();
-            
-            // Apply PWM with rate limiting
-            int pwmOut = constrain((int)round(currPWM), 0, 255);
-            float pwmChange = pwmOut - lastPWMOutput;
-            if (abs(pwmChange) > MAX_PWM_CHANGE_PER_CYCLE) {
-                pwmChange = (pwmChange > 0) ? MAX_PWM_CHANGE_PER_CYCLE : -MAX_PWM_CHANGE_PER_CYCLE;
-                pwmOut = lastPWMOutput + pwmChange;
-            }
-            lastPWMOutput = pwmOut;
-            analogWrite(PWM_pin, pwmOut);
-            
-        } else {
-            // Relay auto-tuning mode - DIRECT CONTROL
-            runRelayTune();
-        }
+    // 1. Sensors: fresh airspeed for both the commands and the controller
+    float currPressure = readPressureSensorAveraged();   // Oversampled + Averaged
+    float currAirDensity = readBarometerSensor();        // Temperature compensated
+    currentAirSpeed = calcCurrentAirSpeed(currPressure, currAirDensity);
 
-        unsigned long elapsed = (now - startTime) / 1000;
-        float error = desiredAirSpeed - currentAirSpeed;
+    // 2. User commands, accepted in every mode (stop must always work)
+    ControlMode modeBeforeCommands = controlMode;
+    pollSerialCommands();
 
-        // Print data
-        if (sTuneActive) {
-            Serial.print("[sTune] ");
-            Serial.print(sTuner->getStatusString()); Serial.print(" | ");
-        } else if (autoTuning) {
-            Serial.print("[TUNE] ");
-            uint32_t tuneElapsed = (millis() - tuneStartTime) / 1000;
-            Serial.print(tuneElapsed); Serial.print("s | ");
-            Serial.print("Cycle:"); Serial.print(cycleCount); Serial.print(" | ");
-        } else {
-            Serial.print(elapsed); Serial.print("s | ");
+    // 3. Control. If a command just started or ended a tune, the new mode has
+    //    already set the fan; let it begin cleanly on the next pass instead of
+    //    running the old controller once more with a different mode's output.
+    if (controlMode == modeBeforeCommands) {
+        switch (controlMode) {
+            case MODE_PID:        runPidControl(); break;
+            case MODE_RELAY_TUNE: runRelayTune();  break;
+            case MODE_STUNE:      runSTune();      break;
         }
-        Serial.print("V:"); Serial.print(currentAirSpeed, 2); Serial.print(" | ");
-        Serial.print("T:"); Serial.print(desiredAirSpeed, 2); Serial.print(" | ");
-        Serial.print("PWM:"); Serial.print((int)round(currPWM)); Serial.print(" | ");
-        Serial.print("P:"); Serial.print(currPressure, 2); Serial.print(" | ");
-        Serial.print("T:"); Serial.print(lastTemperature, 1); Serial.print("°C | ");
-        Serial.print("Err:"); Serial.print(error, 2);
-        
-        // Show PID values and averaging every 20 readings
-        if (debugCounter % 20 == 0 && !autoTuning && !sTuneActive) {
-            Serial.print(" | Kp:"); Serial.print(Kp, 1);
-            Serial.print(" Ki:"); Serial.print(Ki, 1);
-            Serial.print(" Kd:"); Serial.print(Kd, 1);
-            Serial.print(" Avg:"); Serial.print(pressureAverageSamples);
-        }
-        
-        Serial.println();
     }
+
+    printDataLine(now, currPressure);
+}
+
+// Normal closed-loop operation: PID output with a PWM slew-rate limit.
+void runPidControl() {
+    // Target 0 means "fan off": hold PWM at 0 instead of computing. While the
+    // fan coasts down, the falling airspeed would otherwise make the D and
+    // P-on-measurement terms push PWM up again. stopFan() also keeps the PID
+    // initialised, so a new target starts smoothly from 0 PWM.
+    if (desiredAirSpeed <= 0) {
+        stopFan();
+        return;
+    }
+
+    myPID.Compute();
+
+    // Apply PWM with rate limiting
+    int pwmOut = constrain((int)round(currPWM), 0, 255);
+    float pwmChange = pwmOut - lastPWMOutput;
+    if (abs(pwmChange) > MAX_PWM_CHANGE_PER_CYCLE) {
+        pwmChange = (pwmChange > 0) ? MAX_PWM_CHANGE_PER_CYCLE : -MAX_PWM_CHANGE_PER_CYCLE;
+        pwmOut = lastPWMOutput + pwmChange;
+    }
+    lastPWMOutput = pwmOut;
+    analogWrite(PWM_pin, pwmOut);
+}
+
+void printDataLine(unsigned long now, float pressure) {
+    unsigned long elapsed = (now - startTime) / 1000;
+    float error = desiredAirSpeed - currentAirSpeed;
+
+    if (controlMode == MODE_STUNE) {
+        Serial.print("[sTune] ");
+        Serial.print(sTuner->getStatusString()); Serial.print(" | ");
+    } else if (controlMode == MODE_RELAY_TUNE) {
+        Serial.print("[TUNE] ");
+        uint32_t tuneElapsed = (millis() - tuneStartTime) / 1000;
+        Serial.print(tuneElapsed); Serial.print("s | ");
+        Serial.print("Cycle:"); Serial.print(cycleCount); Serial.print(" | ");
+    } else {
+        Serial.print(elapsed); Serial.print("s | ");
+    }
+    Serial.print("V:"); Serial.print(currentAirSpeed, 2); Serial.print(" | ");
+    Serial.print("T:"); Serial.print(desiredAirSpeed, 2); Serial.print(" | ");
+    Serial.print("PWM:"); Serial.print((int)round(currPWM)); Serial.print(" | ");
+    Serial.print("P:"); Serial.print(pressure, 2); Serial.print(" | ");
+    Serial.print("T:"); Serial.print(lastTemperature, 1); Serial.print("°C | ");
+    Serial.print("Err:"); Serial.print(error, 2);
+
+    // Show PID values and averaging every 20 readings
+    if (debugCounter % 20 == 0 && controlMode == MODE_PID) {
+        Serial.print(" | Kp:"); Serial.print(Kp, 1);
+        Serial.print(" Ki:"); Serial.print(Ki, 1);
+        Serial.print(" Kd:"); Serial.print(Kd, 1);
+        Serial.print(" Avg:"); Serial.print(pressureAverageSamples);
+    }
+
+    Serial.println();
 }
 
 void startRelayTune(int pwmLow, int pwmHigh) {
@@ -493,7 +492,7 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     Serial.println(currPWM, 1);
     Serial.println("[RELAY] Tuning active");
     
-    autoTuning = true;
+    controlMode = MODE_RELAY_TUNE;
 }
 
 void runRelayTune() {
@@ -638,7 +637,7 @@ void runRelayTune() {
         Serial.println(Kd, 1);
         Serial.println("=====================================\n");
         
-        autoTuning = false;
+        controlMode = MODE_PID;
         desiredAirSpeed = tuneSetpoint;
         lastPWMOutput = 0;
         myPID.Reset();
@@ -661,7 +660,7 @@ void runRelayTune() {
         Serial.println(" m/s");
         
         setPressureAverageSamples(savedAverageSamples);
-        autoTuning = false;
+        controlMode = MODE_PID;
         currPWM = 0;
         analogWrite(PWM_pin, 0);
     }
@@ -889,138 +888,259 @@ float calcCurrentAirSpeed(float pressure, float AirDensity) {
     return airSpeed;
 }
 
-void checkForUserAirspeedUpdate() {
-    if (Serial.available() > 0) {
-        String inputVal = Serial.readStringUntil('\n');
-        inputVal.trim();
-        
-        if (inputVal.equalsIgnoreCase("stune")) {
-            startSTune();
-            return;
-        }
-        
-        if (inputVal.equalsIgnoreCase("tune")) {
-            startRelayTune();  // Auto PWM
-            return;
-        }
-        
-        if (inputVal.startsWith("tune ") || inputVal.startsWith("TUNE ")) {
-            // Parse "tune" command with parameters
-            // Could be: tune <low> <high> (PWM range) OR tune <Kp> <Ki> <Kd> (manual PID)
-            
-            int firstSpace = inputVal.indexOf(' ');
-            int secondSpace = inputVal.indexOf(' ', firstSpace + 1);
-            int thirdSpace = inputVal.indexOf(' ', secondSpace + 1);
-            
-            if (thirdSpace > 0) {
-                // THREE parameters: tune <Kp> <Ki> <Kd>
-                String kpStr = inputVal.substring(firstSpace + 1, secondSpace);
-                String kiStr = inputVal.substring(secondSpace + 1, thirdSpace);
-                String kdStr = inputVal.substring(thirdSpace + 1);
-                
-                float newKp = kpStr.toFloat();
-                float newKi = kiStr.toFloat();
-                float newKd = kdStr.toFloat();
-                
-                if (newKp > 0 && newKi >= 0 && newKd >= 0) {
-                    // Apply constraints
-                    newKp = constrain(newKp, 1.0, 100.0);
-                    newKi = constrain(newKi, 0.1, 50.0);
-                    newKd = constrain(newKd, 0.1, 50.0);
-                    
-                    Kp = newKp;
-                    Ki = newKi;
-                    Kd = newKd;
-                    
-                    myPID.SetTunings(Kp, Ki, Kd);
-                    myPID.Reset();
-                    
-                    Serial.println("\n[PID] Manual PID gains set:");
-                    Serial.print("      Kp = "); Serial.println(Kp, 4);
-                    Serial.print("      Ki = "); Serial.println(Ki, 4);
-                    Serial.print("      Kd = "); Serial.println(Kd, 4);
-                    Serial.println("      PID controller reset and ready\n");
-                } else {
-                    Serial.println("[ERROR] Invalid PID values");
-                    Serial.println("        Usage: tune <Kp> <Ki> <Kd>");
-                    Serial.println("        Example: tune 20 8 12");
-                    Serial.println("        Ranges: Kp(1-100), Ki(0.1-50), Kd(0.1-50)");
-                }
-                
-            } else if (secondSpace > 0) {
-                // TWO parameters: tune <low> <high> (PWM range)
-                String lowStr = inputVal.substring(firstSpace + 1, secondSpace);
-                String highStr = inputVal.substring(secondSpace + 1);
-                
-                int pwmLow = lowStr.toInt();
-                int pwmHigh = highStr.toInt();
-                
-                if (pwmLow > 0 && pwmHigh > 0) {
-                    startRelayTune(pwmLow, pwmHigh);
-                } else {
-                    Serial.println("[ERROR] Invalid PWM values");
-                    Serial.println("        Usage: tune <low> <high>");
-                    Serial.println("        Example: tune 40 100");
-                }
-            } else {
-                Serial.println("[ERROR] Missing parameters");
-                Serial.println("        For relay auto-tune: tune <low> <high>");
-                Serial.println("          Example: tune 40 100");
-                Serial.println("        For manual PID: tune <Kp> <Ki> <Kd>");
-                Serial.println("          Example: tune 20 8 12");
+// ---------------------------------------------------------------------------
+// Serial commands
+// ---------------------------------------------------------------------------
+
+// Collect typed characters without blocking and run each complete line.
+// A line ends with LF, CR or CR+LF, so every serial monitor setting works.
+void pollSerialCommands() {
+    while (Serial.available() > 0) {
+        char c = (char)Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (serialLineTooLong) {
+                Serial.print("[ERROR] Line too long (max ");
+                Serial.print(SERIAL_LINE_SIZE - 1);
+                Serial.println(" characters) - ignored");
+            } else if (serialLineLength > 0) {
+                serialLine[serialLineLength] = '\0';
+                handleCommand(serialLine);
             }
-            return;
+            serialLineLength = 0;
+            serialLineTooLong = false;
+        } else if (serialLineLength < SERIAL_LINE_SIZE - 1) {
+            serialLine[serialLineLength++] = c;
+        } else {
+            serialLineTooLong = true;   // discard the rest of this line
         }
-        
-        if (inputVal.startsWith("recal") || inputVal.startsWith("RECAL")) {
-            Serial.println("\n[CMD] Recalibrating pressure sensor...");
-            Serial.println("        Stop the fan and ensure no airflow!");
-            
-            int spaceIndex = inputVal.indexOf(' ');
-            if (spaceIndex > 0) {
-                int numSamples = inputVal.substring(spaceIndex + 1).toInt();
-                if (numSamples >= MIN_CALIB_SAMPLES && numSamples <= MAX_CALIB_SAMPLES) {
-                    calibratePressureSensor(true, numSamples);
-                } else {
-                    Serial.print("[ERROR] Calibration samples must be between ");
-                    Serial.print(MIN_CALIB_SAMPLES); Serial.print(" and ");
-                    Serial.println(MAX_CALIB_SAMPLES);
-                }
-            } else {
-                calibratePressureSensor(true);
-            }
-            return;
-        }
-        
-        if (inputVal.startsWith("avg ") || inputVal.startsWith("AVG ")) {
-            int newSamples = inputVal.substring(4).toInt();
-            if (newSamples >= MIN_AVG_SAMPLES && newSamples <= MAX_AVG_SAMPLES) {
-                setPressureAverageSamples(newSamples);
-            } else {
-                Serial.print("[ERROR] Averaging samples must be between ");
-                Serial.print(MIN_AVG_SAMPLES); Serial.print(" and ");
-                Serial.println(MAX_AVG_SAMPLES);
-            }
-            return;
-        }
-        
-        float inputAirSpeed = inputVal.toFloat();
-        
-        if (inputAirSpeed < 0) {
-            Serial.println("[ERROR] Negative airspeed not allowed");
-            return;
-        }
-        
-        if (inputAirSpeed > MAX_AIRSPEED) {
-            Serial.print("[WARN] Capping at "); Serial.print(MAX_AIRSPEED); Serial.println(" m/s");
-            inputAirSpeed = MAX_AIRSPEED;
-        }
-        
-        desiredAirSpeed = inputAirSpeed;
-        myPID.Reset();
-        
-        Serial.print("[SERIAL] New target: "); Serial.print(desiredAirSpeed, 2); Serial.println(" m/s");
     }
+}
+
+// Run one command line. Keywords are case-insensitive.
+void handleCommand(char *line) {
+    char *words[MAX_COMMAND_WORDS];
+    int count = splitWords(line, words, MAX_COMMAND_WORDS);
+    if (count == 0) return;                       // blank line
+    if (count > MAX_COMMAND_WORDS) {
+        Serial.println("[ERROR] Too many values - type 'help' for the command list");
+        return;
+    }
+
+    const char *cmd = words[0];
+    float number = 0.0;
+    bool isNumber = parseDecimal(cmd, number);
+
+    // Stop works in every mode, including during a tune.
+    if (count == 1 && (wordIs(cmd, "stop") || (isNumber && number == 0.0))) {
+        if (controlMode != MODE_PID) {
+            abortTuning("stopped by user");
+        } else {
+            stopFan();
+            Serial.println("[STOP] Fan stopped, target 0 m/s");
+        }
+        return;
+    }
+
+    // While a tuner drives the fan, nothing else may change its state.
+    if (controlMode != MODE_PID) {
+        Serial.println("[BUSY] Tuning in progress - type 0 or stop to abort");
+        return;
+    }
+
+    if (wordIs(cmd, "help")) {
+        printHelp();
+    } else if (wordIs(cmd, "tune")) {
+        if (count == 1) {
+            startRelayTune();                     // automatic PWM range
+        } else if (count == 3) {
+            int pwmLow, pwmHigh;
+            if (parseWholeNumber(words[1], 1, 255, pwmLow) &&
+                parseWholeNumber(words[2], 1, 255, pwmHigh)) {
+                startRelayTune(pwmLow, pwmHigh);
+            } else {
+                Serial.println("[ERROR] PWM values must be whole numbers 1-255");
+                Serial.println("        Usage: tune <low> <high>   Example: tune 40 100");
+            }
+        } else if (count == 4) {
+            setManualGains(words[1], words[2], words[3]);
+        } else {
+            Serial.println("[ERROR] Usage: tune | tune <low> <high> | tune <Kp> <Ki> <Kd>");
+        }
+    } else if (wordIs(cmd, "stune") && count == 1) {
+        startSTune();
+    } else if (wordIs(cmd, "recal")) {
+        int samples = calibrationSamples;
+        if (count > 2 || (count == 2 &&
+            !parseWholeNumber(words[1], MIN_CALIB_SAMPLES, MAX_CALIB_SAMPLES, samples))) {
+            Serial.print("[ERROR] Calibration samples must be between ");
+            Serial.print(MIN_CALIB_SAMPLES); Serial.print(" and ");
+            Serial.println(MAX_CALIB_SAMPLES);
+            return;
+        }
+        Serial.println("\n[CMD] Recalibrating pressure sensor...");
+        Serial.println("        Stop the fan and ensure no airflow!");
+        calibratePressureSensor(true, samples);
+    } else if (wordIs(cmd, "avg")) {
+        int samples;
+        if (count == 2 && parseWholeNumber(words[1], MIN_AVG_SAMPLES, MAX_AVG_SAMPLES, samples)) {
+            setPressureAverageSamples(samples);
+        } else {
+            Serial.print("[ERROR] Averaging samples must be between ");
+            Serial.print(MIN_AVG_SAMPLES); Serial.print(" and ");
+            Serial.println(MAX_AVG_SAMPLES);
+        }
+    } else if (isNumber && count == 1) {
+        setTargetAirspeed(number);
+    } else {
+        Serial.print("[ERROR] Unknown command or wrong number of values: '");
+        Serial.print(cmd);
+        Serial.println("' - type 'help' for the command list");
+    }
+}
+
+// Split a line in place into words separated by spaces or tabs.
+// Returns the number of words, or maxWords + 1 if there are more.
+int splitWords(char *line, char *words[], int maxWords) {
+    int count = 0;
+    char *p = line;
+    while (true) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') return count;
+        if (count == maxWords) return maxWords + 1;
+        words[count++] = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') p++;
+        if (*p != '\0') *p++ = '\0';
+    }
+}
+
+// Case-insensitive match of a typed word against a lower-case keyword.
+bool wordIs(const char *word, const char *keyword) {
+    while (*word != '\0' && *keyword != '\0') {
+        if (tolower((unsigned char)*word) != *keyword) return false;
+        word++;
+        keyword++;
+    }
+    return *word == *keyword;
+}
+
+// Parse a plain decimal number such as "12", "-3" or "7.5". The whole word
+// must be a number, so "10abc", "1e3", "nan" or "inf" are rejected and a typo
+// can never turn into a fan speed.
+bool parseDecimal(const char *text, float &value) {
+    const char *p = text;
+    if (*p == '+' || *p == '-') p++;
+    bool hasDigit = false;
+    bool hasPoint = false;
+    for (; *p != '\0'; p++) {
+        if (isdigit((unsigned char)*p)) {
+            hasDigit = true;
+        } else if (*p == '.' && !hasPoint) {
+            hasPoint = true;
+        } else {
+            return false;
+        }
+    }
+    if (!hasDigit) return false;
+    value = (float)atof(text);
+    return isfinite(value);        // very long digit strings overflow to inf
+}
+
+// Parse a whole number and check that it lies in [minValue, maxValue].
+bool parseWholeNumber(const char *text, int minValue, int maxValue, int &value) {
+    float f;
+    if (!parseDecimal(text, f) || f != floorf(f) || f < minValue || f > maxValue) {
+        return false;
+    }
+    value = (int)f;
+    return true;
+}
+
+void setTargetAirspeed(float target) {
+    if (target < 0) {
+        Serial.println("[ERROR] Negative airspeed not allowed");
+        return;
+    }
+    if (target > MAX_AIRSPEED) {
+        Serial.print("[WARN] Capping at "); Serial.print(MAX_AIRSPEED); Serial.println(" m/s");
+        target = MAX_AIRSPEED;
+    }
+    desiredAirSpeed = target;
+    myPID.Reset();
+    Serial.print("[SERIAL] New target: "); Serial.print(desiredAirSpeed, 2); Serial.println(" m/s");
+}
+
+// tune <Kp> <Ki> <Kd>: set the PID gains by hand.
+void setManualGains(const char *kpText, const char *kiText, const char *kdText) {
+    float newKp, newKi, newKd;
+    if (!parseDecimal(kpText, newKp) || !parseDecimal(kiText, newKi) ||
+        !parseDecimal(kdText, newKd) || newKp <= 0 || newKi < 0 || newKd < 0) {
+        Serial.println("[ERROR] Invalid PID values");
+        Serial.println("        Usage: tune <Kp> <Ki> <Kd>");
+        Serial.println("        Example: tune 20 8 12");
+        Serial.println("        Ranges: Kp(1-100), Ki(0.1-50), Kd(0.1-50)");
+        return;
+    }
+    Kp = constrain(newKp, 1.0, 100.0);
+    Ki = constrain(newKi, 0.1, 50.0);
+    Kd = constrain(newKd, 0.1, 50.0);
+
+    myPID.SetTunings(Kp, Ki, Kd);
+    myPID.Reset();
+
+    Serial.println("\n[PID] Manual PID gains set:");
+    Serial.print("      Kp = "); Serial.println(Kp, 4);
+    Serial.print("      Ki = "); Serial.println(Ki, 4);
+    Serial.print("      Kd = "); Serial.println(Kd, 4);
+    Serial.println("      PID controller reset and ready\n");
+}
+
+// Stop the fan now and leave the PID idle at zero output and zero target.
+void stopFan() {
+    desiredAirSpeed = 0;
+    currPWM = 0;
+    lastPWMOutput = 0;
+    analogWrite(PWM_pin, 0);
+    pidBumplessStart();
+}
+
+// Hand the fan to the PID without a bump. Switching QuickPID from manual back
+// to automatic runs its Initialize(): the integral starts at the present
+// output (currPWM) and the derivative at the present airspeed, so the first
+// Compute() continues smoothly from where the fan is now.
+void pidBumplessStart() {
+    myPID.SetMode(QuickPID::Control::manual);
+    myPID.SetMode(QuickPID::Control::automatic);
+}
+
+// End a running relay tune or sTune without applying any gains.
+void abortTuning(const char *reason) {
+    if (controlMode == MODE_STUNE) sTuner->reset();
+    controlMode = MODE_PID;
+    stopFan();
+    Serial.print("\n[TUNE] Tuning aborted (");
+    Serial.print(reason);
+    Serial.println(") - fan stopped, target 0 m/s, gains unchanged\n");
+}
+
+void printHelp() {
+    Serial.println("COMMANDS (type a line and press Enter):");
+    Serial.print  ("  <m/s>                Set target airspeed, 0 to "); Serial.print(MAX_AIRSPEED, 1);
+    Serial.println(" (e.g. 10)");
+    Serial.println("  0 or stop            Stop the fan now (also aborts a running tune)");
+    Serial.println("  tune                 Relay auto-tune, automatic PWM range");
+    Serial.println("  tune <low> <high>    Relay auto-tune, PWM range 1-255 (e.g. tune 40 100)");
+    Serial.println("  tune <Kp> <Ki> <Kd>  Set PID gains (e.g. tune 20 8 12)");
+    Serial.println("                       Ranges: Kp 1-100, Ki 0.1-50, Kd 0.1-50");
+    Serial.println("  stune                sTune step-response auto-tune");
+    Serial.print  ("  recal [N]            Re-zero the pressure sensor (N = ");
+    Serial.print(MIN_CALIB_SAMPLES); Serial.print("-"); Serial.print(MAX_CALIB_SAMPLES);
+    Serial.println(" samples)");
+    Serial.print  ("  avg <N>              Pressure moving-average length (");
+    Serial.print(MIN_AVG_SAMPLES); Serial.print("-"); Serial.print(MAX_AVG_SAMPLES);
+    Serial.println(")");
+    Serial.println("  help                 Show this list");
+    Serial.print  ("Auto-tunes need a target of at least "); Serial.print(MIN_TUNE_SETPOINT, 1);
+    Serial.println(" m/s. During a tune only 0 or stop is accepted.");
 }
 
 unsigned int RPMcalc() { 
@@ -1122,7 +1242,7 @@ void startSTune() {
     outputStep = constrain(outputStep, 60.0, 200.0);
     
     if (sTuner->startTuning(desiredAirSpeed, MAX_AIRSPEED, 255.0, 0.0, outputStep, 60, 5, 300)) {
-        sTuneActive = true;
+        controlMode = MODE_STUNE;
     }
 }
 
@@ -1151,7 +1271,7 @@ void runSTune() {
         // Restore averaging setting
         setPressureAverageSamples(savedAverageSamples);
         
-        sTuneActive = false;
+        controlMode = MODE_PID;
         sTuner->reset();
         lastPWMOutput = 0;
         
@@ -1161,7 +1281,7 @@ void runSTune() {
         // Restore averaging setting
         setPressureAverageSamples(savedAverageSamples);
         
-        sTuneActive = false;
+        controlMode = MODE_PID;
         sTuner->reset();
         currPWM = 0;
         analogWrite(PWM_pin, 0);
