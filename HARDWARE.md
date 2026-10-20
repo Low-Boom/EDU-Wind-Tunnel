@@ -115,10 +115,10 @@ There are no wiring images for the ESP32-P4. Use the Uno R4 images below with th
 #### M5Stack Tab5 I2C pins
 
 On the M5Stack Tab5, the I2C port (Grove Port A) uses GPIO 53 (SDA) and GPIO 54 (SCL).
-The **ESP32P4 Dev Module** selection and the PlatformIO ESP32-P4 environments use GPIO 7 and 8 instead.
+The PlatformIO ESP32-P4 environments and the **ESP32P4 Dev Module** selection use GPIO 7 and 8 instead.
 Use one of these two methods:
 
-- Keep the **ESP32P4 Dev Module** selection (or your PlatformIO environment). In `PlatformConfig.h`, set `I2C_SDA_PIN` to 53 and `I2C_SCL_PIN` to 54.
+- Keep your PlatformIO environment (or the **ESP32P4 Dev Module** selection in the Arduino IDE). In `PlatformConfig.h`, set `I2C_SDA_PIN` to 53 and `I2C_SCL_PIN` to 54. This is the method for PlatformIO.
 - Or, in the Arduino IDE, select the board **M5Tab5**. Keep `I2C_SDA_PIN` and `I2C_SCL_PIN` at -1. This board selection uses GPIO 53 and 54 by default. Also set its **Chip Variant**.
 
 NOTE: The CI build does not compile for the **M5Tab5** board selection.
@@ -274,7 +274,7 @@ Before you connect a sensor board to 5 V, make sure that its DFRobot product pag
 
 ### Check the sensors at start-up
 
-Open the Serial Monitor at 115200 baud. With correct wiring, the start-up output on an ESP32-P4 contains these lines:
+Open the serial monitor at 115200 baud. With correct wiring, the start-up output on an ESP32-P4 contains these lines:
 
 ```
 Scanning I2C bus Wire

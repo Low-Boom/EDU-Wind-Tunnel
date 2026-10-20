@@ -9,15 +9,15 @@ Readers of the docs and the serial messages are students, teachers, and makers. 
 ## Repository structure
 
 ```
-EDU-Wind-Tunnel/                 # Arduino sketch folder (PlatformIO src_dir)
+EDU-Wind-Tunnel/                 # Firmware source: PlatformIO src_dir, also an Arduino IDE sketch folder
   EDU-Wind-Tunnel.ino            # Settings, setup()/loop(), sensors, PID, safety checks,
                                  #   relay auto-tune, serial commands, output
   PlatformConfig.h               # Board selection: pins, PWM frequency, SERIAL_TX_CAN_BLOCK; #error for other boards
   SerialOut.h/.cpp               # All text output: bounded wait on a native USB port, serialHasRoom()
   I2CScanner.h/.cpp              # Scans Wire (and Wire1 on the Uno R4 WiFi), device registry, direct probe
   STunePIDTuner.h/.cpp           # Wrapper around sTune 2.4.0 (step test, unit conversion, e-stop, report)
-.github/workflows/compile-sketch.yml  # CI "Compile sketch"
-platformio.ini                   # PlatformIO environments and pinned library versions
+.github/workflows/compile-sketch.yml  # CI "Compile sketch" (PlatformIO and Arduino builds)
+platformio.ini                   # PlatformIO (primary build): environments, pinned versions, serial monitor
 3D Print Files/                  # Changed tunnel parts (static pressure taps)
 img/                             # Wiring photos (Uno R4, AC Infinity)
 README.md                        # Entry page: quick start, commands, output, configuration, troubleshooting
@@ -29,18 +29,20 @@ LICENSE                          # MIT (firmware and docs)
 
 ## Supported boards
 
-| Board | Core | FQBN (CI) | PlatformIO environment |
+PlatformIO is the primary build; the Arduino IDE is the alternative. Keep both working.
+
+| Board | Core | PlatformIO environment | Arduino FQBN |
 |---|---|---|---|
-| ESP32-P4, chip before v3.0 | arduino-esp32 3.3.12 | `esp32:esp32:esp32p4` | `esp32p4` (default) |
-| ESP32-P4, chip v3.0 or newer | arduino-esp32 3.3.12 | `esp32:esp32:esp32p4:ChipVariant=postv3` | `esp32p4_r3` |
-| Arduino Uno R4 Minima | Arduino UNO R4 Boards (Renesas) | `arduino:renesas_uno:minima` | `uno_r4_minima` |
-| Arduino Uno R4 WiFi | Arduino UNO R4 Boards (Renesas) | `arduino:renesas_uno:unor4wifi` | `uno_r4_wifi` |
+| ESP32-P4, chip before v3.0 | arduino-esp32 3.3.12 | `esp32p4` (default) | `esp32:esp32:esp32p4` |
+| ESP32-P4, chip v3.0 or newer | arduino-esp32 3.3.12 | `esp32p4_r3` | `esp32:esp32:esp32p4:ChipVariant=postv3` |
+| Arduino Uno R4 Minima | Arduino UNO R4 Boards (Renesas) | `uno_r4_minima` | `arduino:renesas_uno:minima` |
+| Arduino Uno R4 WiFi | Arduino UNO R4 Boards (Renesas) | `uno_r4_wifi` | `arduino:renesas_uno:unor4wifi` |
 
 `PlatformConfig.h` selects the board with `ARDUINO_ARCH_ESP32` + `CONFIG_IDF_TARGET_ESP32P4`, or `ARDUINO_UNOR4_MINIMA` / `ARDUINO_UNOR4_WIFI`. Any other ESP32 chip and any other board stop the build with `#error`. Giga R1, Mega 2560, Uno R3, Nano, M5 Atom, ESP32-S3 and generic ESP32 are removed. Do not add code paths for them.
 
 Board facts used by the code:
 
-- ESP32-P4: `FAN_PWM_PIN` 6, `FAN_PWM_FREQUENCY_HZ` 25000, I2C pins -1 (the selected board's default: SDA 7 / SCL 8 on the ESP32P4 Dev Module, 53 / 54 on the M5Tab5 board entry). Do not use GPIO 14-19 (SDIO link to the on-board ESP32-C6). `SERIAL_TX_CAN_BLOCK` is 1 only with "USB CDC On Boot: Enabled".
+- ESP32-P4: `FAN_PWM_PIN` 6, `FAN_PWM_FREQUENCY_HZ` 25000, I2C pins -1 (the selected board's default: SDA 7 / SCL 8 on the ESP32P4 Dev Module, 53 / 54 on the M5Tab5 board entry). Do not use GPIO 14-19 (SDIO link to the on-board ESP32-C6). `SERIAL_TX_CAN_BLOCK` is 1 only with USB CDC on boot (`-DARDUINO_USB_CDC_ON_BOOT=1` in PlatformIO `build_flags`, "USB CDC On Boot: Enabled" in the Arduino IDE).
 - Uno R4: `FAN_PWM_PIN` 9, core default PWM frequency (`FAN_PWM_FREQUENCY_HZ` 0). The I2C pins are fixed (`Wire` = SDA/SCL header, `Wire1` = Qwiic on the WiFi). `I2C_SDA_PIN`/`I2C_SCL_PIN` must stay -1 (`#error` otherwise). `SERIAL_TX_CAN_BLOCK` is 1 on the Minima (native USB), 0 on the WiFi.
 - `STATUS_LED_PIN` is `LED_BUILTIN` if the core variant defines it, else -1.
 
@@ -100,8 +102,9 @@ Settings are `const` values in the "Settings" section at the top of the `.ino` (
 
 ## How to check a build
 
-- **CI:** the workflow "Compile sketch" (`.github/workflows/compile-sketch.yml`) runs `arduino/compile-sketches` on every push and pull request (and on manual start). It compiles the sketch for the four FQBNs above with the pinned library versions and reports warnings. A change is ready only when all four jobs pass.
-- **arduino-cli (local):**
+- **CI:** the workflow "Compile sketch" (`.github/workflows/compile-sketch.yml`) runs on every push and pull request (and on manual start). Job `platformio` runs `pio run` for the four environments of `platformio.ini`. Job `compile` runs `arduino/compile-sketches` for the four FQBNs above with the pinned library versions and reports warnings. A change is ready only when all eight jobs pass.
+- **PlatformIO (local, primary):** `pio run -e esp32p4`, `pio run -e esp32p4_r3`, `pio run -e uno_r4_minima`, `pio run -e uno_r4_wifi`.
+- **arduino-cli (local, for the Arduino IDE alternative):**
 
   ```sh
   URL=https://espressif.github.io/arduino-esp32/package_esp32_index.json
@@ -120,7 +123,6 @@ Settings are `const` values in the "Settings" section at the top of the `.ino` (
   done
   ```
 
-- **PlatformIO:** `pio run -e esp32p4`, `pio run -e esp32p4_r3`, `pio run -e uno_r4_minima`, `pio run -e uno_r4_wifi`.
 - There is no unit-test framework. On hardware, open the Serial Monitor at 115200 baud and check these items:
   - The boot reaches `[READY] System initialized`.
   - The airspeed reaches a target (for example `5`).

@@ -27,10 +27,10 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 ## Supported hardware
 
-| Microcontroller board | Arduino board package | Status |
-|---|---|---|
-| ESP32-P4 boards, for example Waveshare ESP32-P4-WiFi6-Touch-LCD-7B or M5Stack Tab5 | "esp32 by Espressif Systems" | Recommended |
-| Arduino Uno R4 Minima, Arduino Uno R4 WiFi | "Arduino UNO R4 Boards" | Alternative |
+| Microcontroller board | PlatformIO environment | Arduino IDE board package | Status |
+|---|---|---|---|
+| ESP32-P4 boards, for example Waveshare ESP32-P4-WiFi6-Touch-LCD-7B or M5Stack Tab5 | `esp32p4`, `esp32p4_r3` | "esp32 by Espressif Systems" | Recommended |
+| Arduino Uno R4 Minima, Arduino Uno R4 WiFi | `uno_r4_minima`, `uno_r4_wifi` | "Arduino UNO R4 Boards" | Alternative |
 
 For all other boards, `PlatformConfig.h` stops the build with an `#error`.
 
@@ -72,31 +72,28 @@ The firmware has these safety functions:
 
 ---
 
-## Quick start (Arduino IDE)
+## Quick start (PlatformIO)
 
-1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software).
-2. Open **Tools > Board > Boards Manager**. Install the board package:
-   - ESP32-P4: **esp32 by Espressif Systems**, version 3.3.12 (the version that the CI build uses). If the package is not in the list, add `https://espressif.github.io/arduino-esp32/package_esp32_index.json` in **File > Preferences > Additional boards manager URLs**.
-   - Uno R4: **Arduino UNO R4 Boards**.
-3. Select the board in **Tools > Board**:
-   - ESP32-P4: **ESP32P4 Dev Module**. For the M5Stack Tab5, also read [M5Stack Tab5 I2C pins](HARDWARE.md#m5stack-tab5-i2c-pins).
-   - Uno R4: **Arduino UNO R4 Minima** or **Arduino UNO R4 WiFi**.
-4. ESP32-P4 only: select **Tools > Chip Variant**: **Before v3.00** (default) or **v3.00 or newer**. The Chip Variant must match the chip revision of your ESP32-P4. The upload output of esptool shows the chip revision.
-5. Open **Tools > Manage Libraries**. Install QuickPID, sTune, DFRobot_LWLP, DFRobot_BMP58X, and DFRobot_RTU in the versions that [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md#libraries) gives.
+PlatformIO is the recommended tool. `platformio.ini` sets the board package, the library versions and the serial monitor, so you do not install them yourself. To use the Arduino IDE instead, see [Arduino IDE (alternative)](#arduino-ide-alternative).
 
-   NOTE: DFRobot_BMP58X needs DFRobot_RTU. If the Library Manager does not show a version, download that version (Git tag) from GitHub. Then use **Sketch > Include Library > Add .ZIP Library**.
-6. Wire the sensors and the fan as [HARDWARE.md](HARDWARE.md) shows.
-7. Open `EDU-Wind-Tunnel/EDU-Wind-Tunnel.ino`. Keep all files of the `EDU-Wind-Tunnel` folder together.
-8. Disconnect the fan power.
-9. Select the port in **Tools > Port**.
-10. Click **Upload**.
-11. Open **Tools > Serial Monitor**. Set the speed to **115200 baud**. All line-ending settings work.
+1. Install [VS Code](https://code.visualstudio.com/) and the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode). Or install [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html) for the command line (`pio`).
+2. Wire the sensors and the fan as [HARDWARE.md](HARDWARE.md) shows.
+3. Open the repository folder (the folder that contains `platformio.ini`). At the first build, PlatformIO installs the board package and the five libraries in the versions that [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md#libraries) gives.
+4. Select the environment for your board. In VS Code, use the environment selector in the status bar. On the command line, give it with `-e`.
 
-    NOTE: With **No Line Ending**, a command runs 1.0 to 1.2 s after its last character. This is also true for `0` and `stop`. Do not pause for 1 s or more in a command. For the fastest stop, select **New Line**.
+   | Environment | Board |
+   |---|---|
+   | `esp32p4` (default) | ESP32-P4, chip revision before v3.0 |
+   | `esp32p4_r3` | ESP32-P4, chip revision v3.0 or newer |
+   | `uno_r4_minima` | Arduino Uno R4 Minima |
+   | `uno_r4_wifi` | Arduino Uno R4 WiFi |
 
-    NOTE: After the board receives the first line ending (CR or LF), the 1 s timeout is off until the next reset. If you then change to **No Line Ending**, reset the board.
-12. Reset the board. Keep the tunnel still: no airflow, both pitot ports open to the room. The start-up does these steps:
-    - The firmware waits 2 s for the Serial Monitor. Then it shows the version and the board.
+   ESP32-P4: the environment must match the chip revision of your ESP32-P4. The upload output of esptool shows the chip revision. For the M5Stack Tab5, also read [M5Stack Tab5 I2C pins](HARDWARE.md#m5stack-tab5-i2c-pins).
+5. Disconnect the fan power.
+6. Upload: click **Upload** in the PlatformIO toolbar, or type `pio run -e esp32p4 -t upload`. Use the name of your environment.
+7. Open the serial monitor: click **Serial Monitor** in the PlatformIO toolbar, or type `pio device monitor -e esp32p4`. `platformio.ini` sets the speed (115200 baud). The monitor shows what you type and sends the line when you press Enter, with an LF line ending.
+8. Reset the board. Keep the tunnel still: no airflow, both pitot ports open to the room. The start-up does these steps:
+    - The firmware waits 2 s for the serial monitor. Then it shows the version and the board.
     - It starts the I2C bus and searches for the sensors. The scan shows only the barometric sensor (`0x47` or `0x46`). The differential pressure sensor (address `0x00`) is not in the scan. This is normal.
     - It calibrates the differential pressure sensor with the fan stopped: a 15 s wait, then 50 samples. This takes about 23 s.
     - It shows `[READY] System initialized`, the command list, and then one data line every 200 ms.
@@ -128,29 +125,35 @@ The firmware has these safety functions:
     [...]
     0s | V:0.90 | SP:0.00 | PWM:0 | P:0.48 | Temp:20.0 | Err:-0.90
     ```
-13. After `[READY]`, connect the fan power.
-14. Type `5` to set a target airspeed of 5 m/s. Make sure that `V` moves to `SP`.
-15. Type `0` to stop the fan.
-16. Tune the controller on your tunnel. Follow [TUNING_GUIDE.md](TUNING_GUIDE.md).
+9. After `[READY]`, connect the fan power.
+10. Type `5` to set a target airspeed of 5 m/s. Make sure that `V` moves to `SP`.
+11. Type `0` to stop the fan.
+12. Tune the controller on your tunnel. Follow [TUNING_GUIDE.md](TUNING_GUIDE.md).
 
-## PlatformIO (alternative)
+## Arduino IDE (alternative)
 
-1. Install [VS Code](https://code.visualstudio.com/) and the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode).
-2. Wire the sensors and the fan as [HARDWARE.md](HARDWARE.md) shows.
-3. Open the repository folder. PlatformIO reads `platformio.ini` and installs the five libraries (same versions, from their Git tags).
-4. Select the environment for your board:
+1. Install [Arduino IDE 2.x](https://www.arduino.cc/en/software).
+2. Open **Tools > Board > Boards Manager**. Install the board package:
+   - ESP32-P4: **esp32 by Espressif Systems**, version 3.3.12 (the version that `platformio.ini` and the CI build use). If the package is not in the list, add `https://espressif.github.io/arduino-esp32/package_esp32_index.json` in **File > Preferences > Additional boards manager URLs**.
+   - Uno R4: **Arduino UNO R4 Boards**.
+3. Select the board in **Tools > Board**:
+   - ESP32-P4: **ESP32P4 Dev Module**. For the M5Stack Tab5, also read [M5Stack Tab5 I2C pins](HARDWARE.md#m5stack-tab5-i2c-pins).
+   - Uno R4: **Arduino UNO R4 Minima** or **Arduino UNO R4 WiFi**.
+4. ESP32-P4 only: select **Tools > Chip Variant**: **Before v3.00** (default) or **v3.00 or newer**. The Chip Variant must match the chip revision of your ESP32-P4. The upload output of esptool shows the chip revision.
+5. Open **Tools > Manage Libraries**. Install QuickPID, sTune, DFRobot_LWLP, DFRobot_BMP58X, and DFRobot_RTU in the versions that [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md#libraries) gives.
 
-   | Environment | Board |
-   |---|---|
-   | `esp32p4` (default) | ESP32-P4, chip revision before v3.0 |
-   | `esp32p4_r3` | ESP32-P4, chip revision v3.0 or newer |
-   | `uno_r4_minima` | Arduino Uno R4 Minima |
-   | `uno_r4_wifi` | Arduino Uno R4 WiFi |
+   NOTE: DFRobot_BMP58X needs DFRobot_RTU. If the Library Manager does not show a version, download that version (Git tag) from GitHub. Then use **Sketch > Include Library > Add .ZIP Library**.
+6. Wire the sensors and the fan as [HARDWARE.md](HARDWARE.md) shows.
+7. Open `EDU-Wind-Tunnel/EDU-Wind-Tunnel.ino`. Keep all files of the `EDU-Wind-Tunnel` folder together.
+8. Disconnect the fan power.
+9. Select the port in **Tools > Port**.
+10. Click **Upload**.
+11. Open **Tools > Serial Monitor**. Set the speed to **115200 baud**. All line-ending settings work.
 
-5. Disconnect the fan power.
-6. Upload: `pio run -e esp32p4 -t upload`. Use the name of your environment.
-7. Open the serial monitor: `pio device monitor`. `platformio.ini` sets the speed (115200 baud).
-8. Continue with steps 12 to 16 of the Arduino IDE quick start.
+    NOTE: With **No Line Ending**, a command runs 1.0 to 1.2 s after its last character. This is also true for `0` and `stop`. Do not pause for 1 s or more in a command. For the fastest stop, select **New Line**.
+
+    NOTE: After the board receives the first line ending (CR or LF), the 1 s timeout is off until the next reset. If you then change to **No Line Ending**, reset the board.
+12. Continue with steps 8 to 12 of the [PlatformIO quick start](#quick-start-platformio).
 
 ---
 
@@ -211,7 +214,7 @@ Example (simulation, target airspeed 10 m/s):
 Additional parts at the end of a data line:
 
 - ` | Kp:<Kp> Ki:<Ki> Kd:<Kd> Avg:<N>`: the present gains and averaging length. Every 20th line in PID mode (no auto-tune running), thus every 4 s.
-- ` | Skipped:<n>`: the number of data lines that the firmware did not show, because the computer did not read the serial port. This occurs only on a native USB port: the Uno R4 Minima, and the ESP32-P4 with **Tools > USB CDC On Boot: Enabled**.
+- ` | Skipped:<n>`: the number of data lines that the firmware did not show, because the computer did not read the serial port. This occurs only on a native USB port: the Uno R4 Minima, and the ESP32-P4 with USB CDC on boot (PlatformIO: `-DARDUINO_USB_CDC_ON_BOOT=1` in `build_flags`; Arduino IDE: **Tools > USB CDC On Boot: Enabled**).
 
 On these ports, the firmware waits at most 50 ms for the computer to read. Other text that does not fit into the transmit buffer in this time is lost. When the computer reads again, the next text starts with `[WARN] <n> bytes of output lost: the host did not read`.
 
@@ -261,7 +264,7 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
 | The airspeed reading is noisy. | Short moving average | Type a larger value, for example `avg 10`. A longer average slows the control loop and can make it oscillate. Then reduce the gains or tune again (see [TUNING_GUIDE.md](TUNING_GUIDE.md#averaging-delay)). |
 | The airspeed oscillates around the target | The gains are too high for your fan. | Run `tune` or `stune`, or set lower gains. See [TUNING_GUIDE.md](TUNING_GUIDE.md#troubleshooting-by-symptom). |
 | `[TUNE] Tuning aborted (relay tune timeout) - ...` | The two PWM levels do not give airspeeds above and below the target. | Give the PWM levels, for example `tune 40 100`. See [TUNING_GUIDE.md](TUNING_GUIDE.md#relay-auto-tune-tune). |
-| Commands have no effect | Incorrect speed, or a change to **No Line Ending** after a line ending | Set 115200 baud. Reset the board. |
+| Commands have no effect | Incorrect speed, or (Arduino IDE) a change to **No Line Ending** after a line ending | Set 115200 baud. Reset the board. |
 
 ## Limitations
 
@@ -288,8 +291,8 @@ You can control the firmware from an Android phone with the [Serial USB Terminal
 | [HARDWARE.md](HARDWARE.md) | Tunnel changes, parts list, pins, wiring, pitot tubes |
 | [TUNING_GUIDE.md](TUNING_GUIDE.md) | How the controller works, manual tuning, relay auto-tune, sTune |
 | [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) | Library versions and licenses, tunnel design license |
-| [platformio.ini](platformio.ini) | PlatformIO environments and library versions |
-| [.github/workflows/compile-sketch.yml](.github/workflows/compile-sketch.yml) | CI workflow "Compile sketch". It compiles the firmware for the ESP32-P4 (both chip variants), the Uno R4 Minima and the Uno R4 WiFi on each push and pull request. |
+| [platformio.ini](platformio.ini) | PlatformIO environments, library versions and serial monitor settings |
+| [.github/workflows/compile-sketch.yml](.github/workflows/compile-sketch.yml) | CI workflow "Compile sketch". On each push and pull request, it compiles the firmware for the ESP32-P4 (both chip variants), the Uno R4 Minima and the Uno R4 WiFi, with PlatformIO and with the Arduino toolchain. |
 | `3D Print Files/` | Changed tunnel parts with static pressure taps |
 
 ## Planned
