@@ -277,8 +277,8 @@ void setup() {
     // airspeed rises, and then adds the P-on-measurement step twice (and the
     // I step times 1 + Ki x interval), so the loop is much more aggressive
     // upwards than downwards.
-    // The output limits stay at the full PWM range; the rate limit acts on
-    // the fan after Compute() (see runPidControl()).
+    // The output limits stay at the full PWM range for good; the PWM rate
+    // limit and its anti-windup act around Compute() (see runPidControl()).
     myPID.SetOutputLimits(0, 255);
     myPID.SetSampleTimeUs(UPDATE_INTERVAL_MS * 1000);
     myPID.SetTunings(kp, ki, kd, QuickPID::pMode::pOnMeas, QuickPID::dMode::dOnMeas,
@@ -561,19 +561,34 @@ void runPidControl() {
         return;
     }
 
+    // PWM rate limit without integral windup. With P and D on measurement,
+    // QuickPID's output is sum + D: the running sum holds the integral and
+    // the P action and is the controller's only memory, while the D term is
+    // recomputed from the latest airspeed change and never stored.
+    //
+    // 1. Anti-windup: the sum may move at most MAX_PWM_CHANGE_PER_CYCLE per
+    //    update, as fast as the fan may follow. When a large error asks for
+    //    more (e.g. a big setpoint step), the excess is dropped instead of
+    //    stored, so the sum never runs ahead of the fan and there is nothing
+    //    to unwind later.
+    // 2. Fan: sum + D, at most MAX_PWM_CHANGE_PER_CYCLE from the present PWM.
+    //    A clipped D kick is only delayed, never stored, because the limit
+    //    in step 1 is taken around the last sum and not around the fan PWM.
+    //
+    // The limit must not be a SetOutputLimits() window around the fan PWM:
+    // such a window clamps the sum as well and moves with every D kick, so
+    // D action piles up in the sum and the loop oscillates.
+    float sumBefore = myPID.GetOutputSum();
     myPID.Compute();
-
-    // PWM rate limit, applied to the fan only: the fan PWM follows the PID
-    // output by at most MAX_PWM_CHANGE_PER_CYCLE per update. It must not be
-    // done with the PID's output limits. With P on measurement, QuickPID's
-    // running sum carries the P and I action, and output limits clamp that
-    // sum as well. A +/-25 window around the fan PWM would drag the sum
-    // along whenever the D term pushes the output to the window edge, so a
-    // short D kick would become a lasting PWM change and the loop would
-    // oscillate. The price here is a short lead of the PID output over the
-    // fan while it ramps (windup). A full 0-255 ramp takes only about 10
-    // updates and QuickPID still clamps its sum to 0-255, so the lead stays
-    // small.
+    float sum = myPID.GetOutputSum();
+    float sumLimited = constrain(sum, sumBefore - MAX_PWM_CHANGE_PER_CYCLE,
+                                 sumBefore + MAX_PWM_CHANGE_PER_CYCLE);
+    if (sumLimited != sum) {
+        myPID.SetOutputSum(sumLimited);
+        // Compute()'s own output formula. It is sum + D only because P is on
+        // measurement (already inside the sum); P on error would add a term.
+        currPWM = constrain(sumLimited + myPID.GetDterm(), 0.0f, 255.0f);
+    }
     setFanPwm(constrain((int)round(currPWM),
                         fanPwm - MAX_PWM_CHANGE_PER_CYCLE,
                         fanPwm + MAX_PWM_CHANGE_PER_CYCLE));
