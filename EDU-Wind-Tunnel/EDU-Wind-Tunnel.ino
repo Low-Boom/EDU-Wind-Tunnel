@@ -121,9 +121,9 @@ const uint16_t LWLP_INVALID_CODE = 0x3FFF;
 
 // Safety checks (each stops the fan and sets the target to 0)
 const int MAX_INVALID_PRESSURE_READS = 5;            // in a row: 1 s without valid data
-const int NO_AIRFLOW_PWM = 250;                      // "full fan power"
+const int NO_AIRFLOW_PWM = 250;                      // "full fan power" in PID mode
 const float NO_AIRFLOW_SPEED = 1.0;                  // m/s
-const unsigned long NO_AIRFLOW_TIMEOUT_MS = 15000;   // full-power time without airflow
+const unsigned long NO_AIRFLOW_TIMEOUT_MS = 15000;   // driven time without airflow
 
 // ===========================================================================
 // State
@@ -152,7 +152,7 @@ float currPWM = 0;                       // PID (or tuner) output, 0-255
 int fanPwm = -1;                         // PWM last written to the fan (-1 = never)
 float kp = DEFAULT_KP, ki = DEFAULT_KI, kd = DEFAULT_KD;
 QuickPID myPID(&currentAirSpeed, &currPWM, &desiredAirSpeed);
-unsigned long noAirflowFullPowerMs = 0;  // full-power time since airflow was last seen
+unsigned long noAirflowDrivenMs = 0;     // driven time since airflow was last seen
 
 // --- Relay auto-tune ---
 bool relayHigh = false;                  // true while the high PWM level is applied
@@ -220,7 +220,7 @@ bool applyGains(float newKp, float newKi, float newKd);
 float clampGain(const char *name, float value, float minValue, float maxValue);
 // Safety checks
 void checkPressureSensor();
-void checkAirflow();
+bool checkAirflow(bool fanDriven, const char *fanState);
 // Auto-tuning
 bool tuneTargetOk();
 void startRelayTune(int pwmLow = -1, int pwmHigh = -1);
@@ -374,7 +374,10 @@ void loop() {
     //    the next pass instead of running the old controller once more.
     if (controlMode == modeBeforeCommands) {
         switch (controlMode) {
-            case MODE_PID:        runPidControl(); checkAirflow(); break;
+            case MODE_PID:
+                runPidControl();
+                checkAirflow(fanPwm >= NO_AIRFLOW_PWM, "full fan power");
+                break;
             case MODE_RELAY_TUNE: runRelayTune();  break;
             case MODE_STUNE:      break;           // serviced at the top of loop()
         }
@@ -776,23 +779,28 @@ void checkPressureSensor() {
     Serial.println("[ERROR] Differential pressure sensor not responding");
 }
 
-// PID mode, once per update: full fan power for a long time with (almost)
-// no measured airflow means the measurement is lost, e.g. a pitot hose came
-// off (or the fan has no power). The PID would hold full power forever while
-// the real airspeed may be far above the target. The full-power time is
-// added up since airflow was last seen, not required in one piece: near
-// 0 m/s the noisy reading makes the D term pull the PWM below 250 for
-// single updates every few seconds.
-void checkAirflow() {
+// Once per update in PID mode and during the relay tune. The fan is driven
+// hard (fanDriven: PID at full power, relay at its high level) but (almost)
+// no airflow is measured for a long time: the measurement is lost, e.g. a
+// pitot hose came off (or the fan has no power). The controller would keep
+// pushing while the real airspeed may be far above the target (and the
+// sensor range). The driven time is added up since airflow was last seen,
+// not required in one piece: near 0 m/s the noisy reading makes the PID's D
+// term pull the PWM below 250 for single updates every few seconds.
+// fanState names the drive level in the error message. Returns true if it
+// stopped the fan (a tune is aborted).
+bool checkAirflow(bool fanDriven, const char *fanState) {
     if (desiredAirSpeed <= 0 || currentAirSpeed >= NO_AIRFLOW_SPEED) {
-        noAirflowFullPowerMs = 0;
-        return;
+        noAirflowDrivenMs = 0;
+        return false;
     }
-    if (fanPwm >= NO_AIRFLOW_PWM) noAirflowFullPowerMs += UPDATE_INTERVAL_MS;
-    if (noAirflowFullPowerMs < NO_AIRFLOW_TIMEOUT_MS) return;
-    noAirflowFullPowerMs = 0;
+    if (fanDriven) noAirflowDrivenMs += UPDATE_INTERVAL_MS;
+    if (noAirflowDrivenMs < NO_AIRFLOW_TIMEOUT_MS) return false;
+    noAirflowDrivenMs = 0;
     stopAll("no airflow");
-    Serial.println("[ERROR] No airflow measured at full fan power - check the pitot tubes");
+    Serial.print("[ERROR] No airflow measured at "); Serial.print(fanState);
+    Serial.println(" - check the pitot tubes and the fan");
+    return true;
 }
 
 // ===========================================================================
@@ -847,6 +855,7 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     Serial.println("=====================================");
 
     tuneStartTime = millis();
+    noAirflowDrivenMs = 0;
     firstCrossing = true;
     peakHigh = currentAirSpeed;
     peakLow = currentAirSpeed;
@@ -865,6 +874,10 @@ void runRelayTune() {
         abortTuning("airspeed above MAX_AIRSPEED");
         return;
     }
+    // A lost pitot signal reads as "too slow", so the relay would stay HIGH
+    // until the timeout, even at PWM 255.
+    if (checkAirflow(relayHigh, "the high relay PWM")) return;
+
     if (currentAirSpeed > peakHigh) peakHigh = currentAirSpeed;
     if (currentAirSpeed < peakLow) peakLow = currentAirSpeed;
 
