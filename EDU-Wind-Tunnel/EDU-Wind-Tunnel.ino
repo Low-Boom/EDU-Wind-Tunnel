@@ -37,6 +37,7 @@ const char FIRMWARE_VERSION[] = "1.3";
 
 // Highest target. The LWLP5000 is rated to 500 Pa, which is 28.6 m/s at
 // sea-level air density (1.225 kg/m3); above that the reading is not valid.
+// In dense (cold) air the limit is lower; see maxAirspeed().
 const float MAX_AIRSPEED = 28.0;
 
 // Control loop period. Sensors, commands, PID and the data line all run once
@@ -107,6 +108,21 @@ const uint8_t BMP585_ADDRESS = 0x47;     // DFRobot SEN0665 default
 const uint8_t BMP585_ALT_ADDRESS = 0x46; // with the address jumper changed
 const float AIR_GAS_CONSTANT = 287.058;  // J/(kg K), specific gas constant of dry air
 const float SEA_LEVEL_AIR_DENSITY = 1.225;
+// LWLP5000 range. Its rating (500 Pa) is an airspeed limit that depends on
+// the air density; targets stay below 95 % of it (see maxAirspeed()).
+const float SENSOR_MAX_PRESSURE_PA = 500.0;
+const float SENSOR_USABLE_FRACTION = 0.95;
+// The LWLP library reports no read errors. On a dead bus every byte reads
+// 0xFF, which gives the full-scale code 0x3FFF; a working sensor gives it
+// only above +600 Pa, far outside its rating. Either way the reading is
+// invalid.
+const uint16_t LWLP_INVALID_CODE = 0x3FFF;
+
+// Safety checks (each stops the fan and sets the target to 0)
+const int MAX_INVALID_PRESSURE_READS = 5;            // in a row: 1 s without valid data
+const int NO_AIRFLOW_PWM = 250;                      // "full fan power"
+const float NO_AIRFLOW_SPEED = 1.0;                  // m/s
+const unsigned long NO_AIRFLOW_TIMEOUT_MS = 15000;   // full-power time without airflow
 
 // ===========================================================================
 // State
@@ -120,6 +136,7 @@ float pressureBuffer[MAX_AVG_SAMPLES];   // moving-average ring buffer
 int pressureAverageSamples = DEFAULT_AVG_SAMPLES;
 int pressureBufferIndex = 0;
 bool pressureBufferFilled = false;
+int invalidPressureReads = 0;            // invalid readings in a row
 float airDensity = SEA_LEVEL_AIR_DENSITY;
 float airTemperatureC = 15.0;
 
@@ -134,6 +151,7 @@ float currPWM = 0;                       // PID (or tuner) output, 0-255
 int fanPwm = -1;                         // PWM last written to the fan (-1 = never)
 float kp = DEFAULT_KP, ki = DEFAULT_KI, kd = DEFAULT_KD;
 QuickPID myPID(&currentAirSpeed, &currPWM, &desiredAirSpeed);
+unsigned long noAirflowFullPowerMs = 0;  // full-power time since airflow was last seen
 
 // --- Relay auto-tune ---
 bool relayHigh = false;                  // true while the high PWM level is applied
@@ -161,9 +179,13 @@ const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;
 // --- Serial command input (one line is collected without blocking loop()) ---
 const size_t SERIAL_LINE_SIZE = 64;      // buffer size incl. the terminating '\0'
 const int MAX_COMMAND_WORDS = 4;         // longest command: tune <Kp> <Ki> <Kd>
+// A line also ends after this long without a new character, so the serial
+// monitor's "No line ending" setting works too.
+const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
 char serialLine[SERIAL_LINE_SIZE];
 size_t serialLineLength = 0;
 bool serialLineTooLong = false;
+unsigned long lastSerialCharTime = 0;
 
 // ===========================================================================
 // Forward declarations
@@ -171,21 +193,26 @@ bool serialLineTooLong = false;
 
 // Sensors
 void initBarometer();
-float readPressureRaw();
-float readPressureCorrected();
+bool readPressureRaw(float &pressurePa);
+bool readPressureCorrected(float &pressurePa);
 float readPressureAveraged();
 void resetPressureAverage();
 void setPressureAverageSamples(int samples);
 void calibratePressureSensor(int numSamples);
 float readAirDensity();
 float calcAirspeed(float pressurePa, float density);
+float maxAirspeed();
 // Fan and PID
 void setFanPwm(int pwm);
 void stopFan();
+void stopAll(const char *reason);
 void pidBumplessStart();
 void runPidControl();
 bool applyGains(float newKp, float newKi, float newKd);
 float clampGain(const char *name, float value, float minValue, float maxValue);
+// Safety checks
+void checkPressureSensor();
+void checkAirflow();
 // Auto-tuning
 bool tuneTargetOk();
 void startRelayTune(int pwmLow = -1, int pwmHigh = -1);
@@ -199,6 +226,7 @@ void abortTuning(const char *reason);
 void finishTuning(float newKp, float newKi, float newKd);
 // Serial commands
 void pollSerialCommands();
+void endSerialLine();
 void handleCommand(char *line);
 int splitWords(char *line, char *words[], int maxWords);
 bool wordIs(const char *word, const char *keyword);
@@ -335,12 +363,16 @@ void loop() {
     pollSerialCommands();
     unsigned long commandTime = millis() - commandStart;   // e.g. recal blocks on purpose
 
-    // 3. Control. If a command just started or ended a tune, the new mode has
-    //    already set the fan; let it begin cleanly on the next pass instead of
-    //    running the old controller once more.
+    // 3. Safety: without valid pressure data the fan must not run. Checked
+    //    after the commands, so a new target is cancelled before it acts.
+    checkPressureSensor();
+
+    // 4. Control. If a command (or the check above) just started or ended a
+    //    tune, the new mode has already set the fan; let it begin cleanly on
+    //    the next pass instead of running the old controller once more.
     if (controlMode == modeBeforeCommands) {
         switch (controlMode) {
-            case MODE_PID:        runPidControl(); break;
+            case MODE_PID:        runPidControl(); checkAirflow(); break;
             case MODE_RELAY_TUNE: runRelayTune();  break;
             case MODE_STUNE:      break;           // serviced at the top of loop()
         }
@@ -389,39 +421,59 @@ void initBarometer() {
     Serial.print(" C, air density: "); Serial.print(airDensity, 3); Serial.println(" kg/m3");
 }
 
-// One raw sensor reading in Pa. The LWLP library already subtracts the
-// reading it took at power-on; calibration removes what is left of the zero
-// error. Blocks for about 60 ms (the library waits for the conversion).
-float readPressureRaw() {
-    return lwlp.getData().presure;       // "presure" is the library's spelling
+// One raw sensor reading in Pa; returns false if it is invalid (see
+// LWLP_INVALID_CODE). The LWLP library already subtracts the reading it took
+// at power-on; calibration removes what is left of the zero error. Blocks
+// for about 60 ms (the library waits for the conversion).
+bool readPressureRaw(float &pressurePa) {
+    DFRobot_LWLP::sLwlp_t reading = lwlp.getData();
+    pressurePa = reading.presure;        // "presure" is the library's spelling
+    return reading.presureData != LWLP_INVALID_CODE;
 }
 
-// Oversampled reading minus the calibration offset. Kept signed on purpose:
-// at zero airspeed the noise swings both ways, and clamping negative values
-// here would bias the moving average (and the airspeed) upward.
-float readPressureCorrected() {
+// Oversampled reading minus the calibration offset; false if no reading was
+// valid. Kept signed on purpose: at zero airspeed the noise swings both
+// ways, and clamping negative values here would bias the moving average
+// (and the airspeed) upward.
+bool readPressureCorrected(float &pressurePa) {
     float sum = 0.0;
+    int valid = 0;
     for (int i = 0; i < PRESSURE_OVERSAMPLES; i++) {
-        sum += readPressureRaw();
+        float reading;
+        if (readPressureRaw(reading)) {
+            sum += reading;
+            valid++;
+        }
     }
-    return sum / PRESSURE_OVERSAMPLES - pressureOffset;
+    if (valid == 0) return false;
+    pressurePa = sum / valid - pressureOffset;
+    return true;
 }
 
-// Moving average over the last pressureAverageSamples corrected readings.
+// Moving average over the last pressureAverageSamples valid readings. An
+// invalid reading is left out and counted; checkPressureSensor() acts on a
+// run of them.
 float readPressureAveraged() {
-    pressureBuffer[pressureBufferIndex] = readPressureCorrected();
-    pressureBufferIndex++;
-    if (pressureBufferIndex >= pressureAverageSamples) {
-        pressureBufferIndex = 0;
-        pressureBufferFilled = true;
+    float reading;
+    if (readPressureCorrected(reading)) {
+        invalidPressureReads = 0;
+        pressureBuffer[pressureBufferIndex] = reading;
+        pressureBufferIndex++;
+        if (pressureBufferIndex >= pressureAverageSamples) {
+            pressureBufferIndex = 0;
+            pressureBufferFilled = true;
+        }
+    } else {
+        invalidPressureReads++;
     }
 
     int count = pressureBufferFilled ? pressureAverageSamples : pressureBufferIndex;
+    if (count == 0) return 0.0;          // no valid reading since the last reset
     float sum = 0.0;
     for (int i = 0; i < count; i++) {
         sum += pressureBuffer[i];
     }
-    return sum / count;                  // count >= 1: one sample was just stored
+    return sum / count;
 }
 
 // Forget old samples (after a new offset or a new averaging length).
@@ -473,24 +525,44 @@ void calibratePressureSensor(int numSamples) {
     double sumSquares = 0.0;
     float minVal = 0.0;
     float maxVal = 0.0;
+    int valid = 0;
     for (int i = 0; i < numSamples; i++) {
-        float reading = readPressureRaw();
-        sum += reading;
-        sumSquares += (double)reading * reading;
-        if (i == 0 || reading < minVal) minVal = reading;
-        if (i == 0 || reading > maxVal) maxVal = reading;
-        Serial.print(".");
+        float reading;
+        if (readPressureRaw(reading)) {  // invalid readings are skipped ("x")
+            sum += reading;
+            sumSquares += (double)reading * reading;
+            if (valid == 0 || reading < minVal) minVal = reading;
+            if (valid == 0 || reading > maxVal) maxVal = reading;
+            valid++;
+            Serial.print(".");
+        } else {
+            Serial.print("x");
+        }
         delay(CALIB_SAMPLE_SPACING_MS);
     }
     Serial.println();
 
-    float mean = sum / numSamples;
-    float variance = sumSquares / numSamples - (double)mean * mean;
+    // With most readings invalid the sensor is not working, and an offset
+    // from the few others would make every later airspeed wrong.
+    if (valid * 2 < numSamples) {
+        Serial.print("[ERROR] Only "); Serial.print(valid); Serial.print(" of ");
+        Serial.print(numSamples); Serial.println(" readings were valid: the pressure sensor is not responding");
+        Serial.print("        Offset unchanged ("); Serial.print(pressureOffset, 4);
+        Serial.println(" Pa). Check the SEN0343 wiring, then type recal");
+        Serial.println("=====================================\n");
+        return;
+    }
+
+    float mean = sum / valid;
+    float variance = sumSquares / valid - (double)mean * mean;
     if (variance < 0) variance = 0;      // rounding can give tiny negatives
     pressureOffset = mean;
     resetPressureAverage();              // old samples used the old offset
 
     Serial.println("\n        Calibration Results:");
+    if (valid < numSamples) {
+        Serial.print("        Invalid readings skipped: "); Serial.println(numSamples - valid);
+    }
     Serial.print("        Min reading: "); Serial.print(minVal, 4); Serial.println(" Pa");
     Serial.print("        Max reading: "); Serial.print(maxVal, 4); Serial.println(" Pa");
     Serial.print("        Offset (mean): "); Serial.print(pressureOffset, 4); Serial.println(" Pa");
@@ -520,6 +592,14 @@ float calcAirspeed(float pressurePa, float density) {
     return sqrt(2.0 * pressurePa / density);
 }
 
+// Highest target the sensor can measure in the present air: 95 % of its
+// 500 Pa rating (28.1 m/s at 1.204 kg/m3, 27.3 m/s in cold dense air at
+// 1.276 kg/m3), never above MAX_AIRSPEED.
+float maxAirspeed() {
+    float limit = calcAirspeed(SENSOR_USABLE_FRACTION * SENSOR_MAX_PRESSURE_PA, airDensity);
+    return (limit < MAX_AIRSPEED) ? limit : MAX_AIRSPEED;
+}
+
 // ===========================================================================
 // Fan and PID
 // ===========================================================================
@@ -547,6 +627,18 @@ void stopFan() {
     currPWM = 0;
     setFanPwm(0);
     pidBumplessStart();
+}
+
+// Stop the fan now, whatever runs: a tune is aborted (gains unchanged),
+// otherwise the PID is left idle at target 0. Used by the stop command and
+// by the safety checks.
+void stopAll(const char *reason) {
+    if (controlMode != MODE_PID) {
+        abortTuning(reason);
+        return;
+    }
+    stopFan();
+    Serial.print("[STOP] Fan stopped, target 0 m/s ("); Serial.print(reason); Serial.println(")");
 }
 
 // Hand the fan to the PID without a bump. Switching QuickPID from manual to
@@ -635,6 +727,39 @@ float clampGain(const char *name, float value, float minValue, float maxValue) {
 }
 
 // ===========================================================================
+// Safety checks
+// ===========================================================================
+
+// A run of invalid readings (dead bus, unplugged sensor) means the airspeed
+// is unknown, so the fan must not run. Stops it in any mode and again on
+// every new target or tune until the sensor gives valid data.
+void checkPressureSensor() {
+    if (invalidPressureReads < MAX_INVALID_PRESSURE_READS) return;
+    if (controlMode == MODE_PID && desiredAirSpeed <= 0 && fanPwm == 0) return;   // already off
+    Serial.println("\n[ERROR] Differential pressure sensor not responding");
+    stopAll("no valid pressure data");
+}
+
+// PID mode, once per update: full fan power for a long time with (almost)
+// no measured airflow means the measurement is lost, e.g. a pitot hose came
+// off (or the fan has no power). The PID would hold full power forever while
+// the real airspeed may be far above the target. The full-power time is
+// added up since airflow was last seen, not required in one piece: near
+// 0 m/s the noisy reading makes the D term pull the PWM below 250 for
+// single updates every few seconds.
+void checkAirflow() {
+    if (desiredAirSpeed <= 0 || currentAirSpeed >= NO_AIRFLOW_SPEED) {
+        noAirflowFullPowerMs = 0;
+        return;
+    }
+    if (fanPwm >= NO_AIRFLOW_PWM) noAirflowFullPowerMs += UPDATE_INTERVAL_MS;
+    if (noAirflowFullPowerMs < NO_AIRFLOW_TIMEOUT_MS) return;
+    noAirflowFullPowerMs = 0;
+    Serial.println("\n[ERROR] No airflow measured at full fan power - check the pitot tubes");
+    stopAll("no airflow");
+}
+
+// ===========================================================================
 // Auto-tuning: relay tune and sTune
 // ===========================================================================
 
@@ -650,6 +775,14 @@ bool tuneTargetOk() {
 // "estimate the PWM levels from the target".
 void startRelayTune(int pwmLow, int pwmHigh) {
     if (!tuneTargetOk()) return;
+    // The relay switches back to LOW only above target + hysteresis, so that
+    // airspeed must still be measurable.
+    if (desiredAirSpeed + RELAY_HYSTERESIS > maxAirspeed()) {
+        Serial.print("[ERROR] Relay tune needs target + "); Serial.print(RELAY_HYSTERESIS, 1);
+        Serial.print(" m/s within the sensor limit of "); Serial.print(maxAirspeed(), 1);
+        Serial.println(" m/s - set a lower target");
+        return;
+    }
 
     bool autoRange = (pwmLow < 0 || pwmHigh < 0);
     if (autoRange) {
@@ -690,6 +823,12 @@ void startRelayTune(int pwmLow, int pwmHigh) {
 
 // One relay step per update interval.
 void runRelayTune() {
+    // The relay levels are fixed, so a strong fan can overshoot the sensor
+    // range; sTune has the same limit as its emergency stop.
+    if (currentAirSpeed > MAX_AIRSPEED) {
+        abortTuning("airspeed above MAX_AIRSPEED");
+        return;
+    }
     if (currentAirSpeed > peakHigh) peakHigh = currentAirSpeed;
     if (currentAirSpeed < peakLow) peakLow = currentAirSpeed;
 
@@ -849,27 +988,39 @@ void finishTuning(float newKp, float newKi, float newKd) {
 // ===========================================================================
 
 // Collect typed characters without blocking and run each complete line.
-// A line ends with LF, CR or CR+LF, so every serial monitor setting works.
+// A line ends with LF, CR or CR+LF, or when no new character has arrived
+// for SERIAL_LINE_TIMEOUT_MS ("No line ending"), so every serial monitor
+// setting works and a partial line is never prepended to a later command.
 void pollSerialCommands() {
     while (Serial.available() > 0) {
         char c = (char)Serial.read();
+        lastSerialCharTime = millis();
         if (c == '\n' || c == '\r') {
-            if (serialLineTooLong) {
-                Serial.print("[ERROR] Line too long (max ");
-                Serial.print(SERIAL_LINE_SIZE - 1);
-                Serial.println(" characters) - ignored");
-            } else if (serialLineLength > 0) {
-                serialLine[serialLineLength] = '\0';
-                handleCommand(serialLine);
-            }
-            serialLineLength = 0;
-            serialLineTooLong = false;
+            endSerialLine();
         } else if (serialLineLength < SERIAL_LINE_SIZE - 1) {
             serialLine[serialLineLength++] = c;
         } else {
             serialLineTooLong = true;    // discard the rest of this line
         }
     }
+    bool partialLine = serialLineLength > 0 || serialLineTooLong;
+    if (partialLine && millis() - lastSerialCharTime >= SERIAL_LINE_TIMEOUT_MS) {
+        endSerialLine();
+    }
+}
+
+// Run the collected line (if any) and start a new one.
+void endSerialLine() {
+    if (serialLineTooLong) {
+        Serial.print("[ERROR] Line too long (max ");
+        Serial.print(SERIAL_LINE_SIZE - 1);
+        Serial.println(" characters) - ignored");
+    } else if (serialLineLength > 0) {
+        serialLine[serialLineLength] = '\0';
+        handleCommand(serialLine);
+    }
+    serialLineLength = 0;
+    serialLineTooLong = false;
 }
 
 // Run one command line. Keywords are case-insensitive.
@@ -888,12 +1039,7 @@ void handleCommand(char *line) {
 
     // Stop works in every mode, including during a tune.
     if (count == 1 && (wordIs(cmd, "stop") || (isNumber && number == 0.0))) {
-        if (controlMode != MODE_PID) {
-            abortTuning("stopped by user");
-        } else {
-            stopFan();
-            Serial.println("[STOP] Fan stopped, target 0 m/s");
-        }
+        stopAll("stopped by user");
         return;
     }
 
@@ -1014,9 +1160,11 @@ void setTargetAirspeed(float target) {
         Serial.println("[ERROR] Negative airspeed not allowed");
         return;
     }
-    if (target > MAX_AIRSPEED) {
-        Serial.print("[WARN] Capping at "); Serial.print(MAX_AIRSPEED, 1); Serial.println(" m/s");
-        target = MAX_AIRSPEED;
+    float limit = maxAirspeed();
+    if (target > limit) {
+        Serial.print("[WARN] Capping at "); Serial.print(limit, 2);
+        Serial.println(" m/s (sensor limit in the present air)");
+        target = limit;
     }
     // Only the setpoint changes; the PID continues smoothly from the present PWM.
     desiredAirSpeed = target;
@@ -1050,7 +1198,7 @@ void printBanner() {
 
 void printHelp() {
     Serial.println("COMMANDS (type a line and press Enter):");
-    Serial.print  ("  <m/s>                Set target airspeed, 0 to "); Serial.print(MAX_AIRSPEED, 1);
+    Serial.print  ("  <m/s>                Set target airspeed, 0 to "); Serial.print(maxAirspeed(), 1);
     Serial.println(" (e.g. 10)");
     Serial.println("  0 or stop            Stop the fan now (also aborts a running tune)");
     Serial.println("  tune                 Relay auto-tune, automatic PWM range");
