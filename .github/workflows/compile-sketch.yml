@@ -1,4 +1,6 @@
-# Compile the firmware for every supported board on each push and pull request.
+# Compile the firmware for every supported board on each push and pull request:
+# with PlatformIO (the recommended build, job "platformio") and with the Arduino
+# toolchain (the Arduino IDE alternative, job "compile").
 # A board that is not in this list is not supported (PlatformConfig.h stops the build with #error).
 name: Compile sketch
 
@@ -8,6 +10,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  platformio:
+    name: PlatformIO ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Environments of platformio.ini (cores and library versions are pinned there)
+        env: [esp32p4, esp32p4_r3, uno_r4_minima, uno_r4_wifi]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build
+        run: pio run -e ${{ matrix.env }}
+
   compile:
     name: ${{ matrix.board.name }}
     runs-on: ubuntu-latest
