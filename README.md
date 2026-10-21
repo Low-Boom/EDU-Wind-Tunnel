@@ -92,6 +92,8 @@ PlatformIO is the recommended tool. `platformio.ini` sets the board package, the
 5. Disconnect the fan power.
 6. Upload: click **Upload** in the PlatformIO toolbar, or type `pio run -e esp32p4 -t upload`. Use the name of your environment.
 7. Open the serial monitor: click **Serial Monitor** in the PlatformIO toolbar, or type `pio device monitor -e esp32p4`. `platformio.ini` sets the speed (115200 baud). The monitor shows what you type and sends the line when you press Enter, with an LF line ending.
+
+   ESP32-P4: the firmware sends its serial output to UART0. Connect the computer to the USB port of the board that goes through the USB-UART bridge (on many boards, the port with the label "UART"). The USB port of the chip itself (USB Serial/JTAG) shows only the boot messages of the chip. Upload operates through the two ports. To use the USB port of the chip for the serial monitor, add `-DARDUINO_USB_MODE=1 -DARDUINO_USB_CDC_ON_BOOT=1` to `build_flags` (see `Skipped:<n>` in [Serial output](#serial-output) for the effect on the output).
 8. Reset the board. Keep the tunnel still: no airflow, both pitot ports open to the room. The start-up does these steps:
     - The firmware waits 2 s for the serial monitor. Then it shows the version and the board.
     - It starts the I2C bus and searches for the sensors. The scan shows only the barometric sensor (`0x47` or `0x46`). The differential pressure sensor (address `0x00`) is not in the scan. This is normal.
