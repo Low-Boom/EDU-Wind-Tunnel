@@ -4,11 +4,11 @@ Firmware for a microcontroller board that keeps the airspeed in a small educatio
 
 Developed by [Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon.
 
-Debugging assistance provided by Anthropic Claude Sonnet 4.5 and verified by humans. Claude Code (Anthropic) helped with the version 1.3 changes. For their test status, see [Limitations](#limitations).
+Debugging assistance provided by Anthropic Claude Sonnet 4.5 and verified by humans. Claude Code (Anthropic) helped with the version 1.4 changes. For their test status, see [Limitations](#limitations).
 
 Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/).
 
-[![Version](https://img.shields.io/badge/version-1.3-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
+[![Version](https://img.shields.io/badge/version-1.4-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![ESP32-P4](https://img.shields.io/badge/ESP32--P4-supported-E7352C?logo=espressif)](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)
 [![Uno R4](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4)
@@ -106,7 +106,7 @@ PlatformIO is the recommended tool. `platformio.ini` sets the board package, the
 
     ```
     =====================================
-       EDU Wind Tunnel PID Controller v1.3
+       EDU Wind Tunnel PID Controller v1.4
        Board: ESP32-P4
     [...]
     [INIT] I2C bus... OK (SDA 7, SCL 8, 100 kHz)
@@ -270,7 +270,7 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
 
 ## Limitations
 
-- The version 1.3 changes have tests in simulation only (simulated fan and sensors), not on hardware.
+- The version 1.4 changes have tests in simulation only (simulated fan and sensors), not on hardware.
 - The default gains (Kp 25, Ki 10, Kd 15) are a starting point. They are validated only in simulation, where they were stable on 4 of 5 fan models. Tune the controller on your tunnel and make sure that it is stable.
 - The stop command (`0` or `stop`) does not work in these conditions:
   - The line has more than 63 characters (also a line that starts with `stop`).
