@@ -17,6 +17,7 @@ For the commands and the serial output, see [README.md](README.md).
   - To use your gains again, type the `tune <Kp> <Ki> <Kd>` line that the firmware prints after an auto-tune.
   - To change the defaults, edit `DEFAULT_KP`, `DEFAULT_KI` and `DEFAULT_KD` in the Settings section of `EDU-Wind-Tunnel.ino`, then upload again.
 - To stop the fan, type `0` or `stop`. This also stops a running auto-tune.
+- Run `fanmap` first (see [Fan map](#fan-map-fanmap)). Both auto-tunes then take their PWM levels from your fan, not from an estimate.
 
 Gain units (all gains use seconds):
 
@@ -117,6 +118,64 @@ For the effect of each gain, see [Gain-effect reference](#gain-effect-reference)
 
 ---
 
+## Fan map (`fanmap`)
+
+The fan map shows how your fan responds to the PWM value: the airspeed and (with the tach wire) the fan RPM at fixed PWM values.
+Both auto-tunes use it to find the PWM value for the target airspeed.
+Without a map, they use a fixed estimate of 8 PWM per m/s (`FAN_PWM_PER_MPS_ESTIMATE`). This estimate can be wrong for your fan.
+
+### Run
+
+1. Make sure that the tunnel is clear and that the fan can run up to its high speeds.
+2. Type `fanmap`.
+3. Wait about 2.5 min. The fan runs at PWM 40, 65, 90, ... 240. It holds each value for 15 s, then measures for 2 s.
+4. The firmware stops the fan, sets the target airspeed to 0, and shows the table.
+
+`fanmap` ends early if the airspeed goes above the sensor limit. The table then has the values up to that point. The auto-tunes cannot use a higher target in any case.
+Type `0` or `stop` to abort; the previous map stays.
+The firmware does not store the map. After a reset, run `fanmap` again.
+
+Example (simulated fan with a tach wire):
+
+```
+  PWM |   RPM | V (m/s) | Gain (m/s per PWM)
+   40 |   470 |    4.71 | -
+   65 |   764 |    7.63 | 0.117
+   90 |  1059 |   10.56 | 0.117
+  115 |  1352 |   13.50 | 0.118
+[...]
+  215 |  2528 |   25.25 | 0.117
+[FANMAP] Done (stopped at the sensor limit) - fan stopped, target 0 m/s
+[FANMAP] Highest airspeed: 25.25 m/s. tune and stune now take their PWM levels from this map.
+```
+
+Without the tach wire, the RPM column shows `-`.
+The map is usable if it has at least two values and its highest airspeed is 2.0 m/s or more. If not, the firmware shows `[ERROR] Fan map not usable: ...` and keeps the previous map.
+
+### How the auto-tunes use the map
+
+The firmware finds the PWM value for the target by linear interpolation between the values of the map.
+If the target is above the highest airspeed of the map, it uses the estimate.
+
+- `tune`: the relay levels are this PWM value -20 and +20 (see [Start](#start)). The start text then shows `(from the fan map)`.
+- `stune`: the step PWM is this PWM value (see [Step test](#step-test)). The start text shows `[sTune] Step PWM for the target: from the fan map`.
+
+In simulation, a relay tune at 10 m/s without a map did not complete on two of five fan models: PWM 100 (the estimate 80 + 20) did not reach 10 m/s. With a map, it completed on all five. The map put the relay levels and the sTune step within 3 PWM of the correct value for each model.
+
+### Gain column and manual tuning
+
+`Gain` is the change of airspeed per PWM step between two rows: the gain of your fan.
+The loop gain is Kp x fan gain. Thus a fan with a higher gain needs lower PID gains for the same response.
+The default gains (Kp 25, Ki 10, Kd 15) were validated on a simulated fan with a gain of about 0.12 m/s per PWM.
+For a start value on your fan, multiply all three default gains by 0.12 / (your fan gain near your target).
+This is a rule of thumb only: it does not include the time constants of your fan. Then tune as [Manual tuning](#manual-tuning) shows, or run an auto-tune.
+
+Example: your fan gain near 10 m/s is 0.24 m/s per PWM (two times 0.12). Start with `tune 12.5 5 7.5`.
+
+The RPM column shows if the fan reaches its rated speed and at which PWM value it starts to turn. Use a relay low level above that PWM value.
+
+---
+
 ## Relay auto-tune (`tune`)
 
 The relay auto-tune (Astrom-Hagglund method) runs the fan in a controlled oscillation around the target.
@@ -133,18 +192,18 @@ Conditions:
 - Target + 0.5 m/s must not be more than the sensor limit in the present air.
 - `<low>` and `<high>` must be whole numbers from 1 to 255, and `<low>` must be less than `<high>`.
 
-Automatic PWM range: the firmware estimates 8 PWM per m/s (`FAN_PWM_PER_MPS_ESTIMATE`):
+Automatic PWM range: the firmware finds the PWM value for the target in the fan map (see [Fan map](#fan-map-fanmap)). Without a map, or for a target above the map, it estimates 8 PWM per m/s (`FAN_PWM_PER_MPS_ESTIMATE`):
 
 ```
-estimate = round(target x 8)
-high     = estimate + 20, kept within 40-245
-low      = estimate - 20, kept within 20-150
+center = PWM for the target from the fan map, or round(target x 8)
+high   = center + 20, kept within 40-245
+low    = center - 20, kept within 20-150
 ```
 
-Examples: 2 m/s gives 20-40, 5 m/s gives 20-60, 10 m/s gives 60-100, 20 m/s gives 140-180, 25 m/s gives 150-220.
+Estimate examples (no map): 2 m/s gives 20-40, 5 m/s gives 20-60, 10 m/s gives 60-100, 20 m/s gives 140-180, 25 m/s gives 150-220.
 
 CAUTION: The estimate of 8 PWM per m/s can be wrong for your fan. Then the two levels do not bracket the target and the tune times out.
-Give the range by hand:
+Run `fanmap` first. Or give the range by hand:
 
 1. Set the target in PID mode and wait until the airspeed is steady.
 2. Read the PWM value in the data lines.
@@ -237,12 +296,14 @@ The firmware uses the `Mixed_PID` rule: the average of the Ziegler-Nichols, damp
 
 ### Step test
 
-The firmware sets the step PWM from the target:
+The firmware sets the step PWM from the target: the PWM value for the target from the fan map (see [Fan map](#fan-map-fanmap)), or the estimate of 8 PWM per m/s without a map:
 
 ```
-step PWM  = target x 8, kept within 60-200
+step PWM  = PWM for the target from the fan map, or target x 8; kept within 60-200
 start PWM = round(0.6 x step PWM)
 ```
+
+Estimate examples (no map):
 
 | Target | Step (start PWM -> step PWM) |
 |---|---|

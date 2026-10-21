@@ -17,6 +17,8 @@
  *   I2C_SDA_PIN/SCL_PIN   I2C pins for Wire (-1 = the board's default pins)
  *   FAN_PWM_PIN           PWM output to the fan
  *   FAN_PWM_FREQUENCY_HZ  Fan PWM frequency (0 = core default)
+ *   FAN_TACH_PIN          Input for the fan tachometer wire (optional;
+ *                         -1 = not used). Must support interrupts.
  *   SERIAL_TX_CAN_BLOCK   1 if Serial.print() can block while the host does
  *                         not read (native USB serial); see SerialOut.h
  *   STATUS_LED_PIN        LED that blinks on a fatal error (-1 = none)
@@ -45,6 +47,7 @@
   #define I2C_SDA_PIN           -1
   #define I2C_SCL_PIN           -1
   #define FAN_PWM_PIN           6
+  #define FAN_TACH_PIN          5     // any free GPIO 36 or lower, not 14-19
   // 25 kHz is the PWM frequency of 4-pin PC fans (Intel spec) and is above
   // human hearing; the core's 1 kHz default can make fans whine.
   #define FAN_PWM_FREQUENCY_HZ  25000
@@ -76,6 +79,7 @@
     #error "Uno R4: the I2C pins are fixed by the board; leave I2C_SDA_PIN and I2C_SCL_PIN at -1."
   #endif
   #define FAN_PWM_PIN           9
+  #define FAN_TACH_PIN          2     // D2 (interrupt-capable), as in the wiring images
   #define FAN_PWM_FREQUENCY_HZ  0       // core default (490 Hz)
 
 #else

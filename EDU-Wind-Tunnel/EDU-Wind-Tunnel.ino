@@ -27,6 +27,8 @@
 #include "DFRobot_BMP58X.h"
 #include "PlatformConfig.h"     // board pins: FAN_PWM_PIN, I2C pins, STATUS_LED_PIN
 #include "I2CScanner.h"
+#include "FanTach.h"
+#include "FanMap.h"
 #include "STunePIDTuner.h"
 #include "SerialOut.h"           // all text output (bounded wait), serialHasRoom()
 
@@ -80,8 +82,25 @@ const int MAX_PWM_CHANGE_PER_CYCLE = 25;
 // Auto-tuning
 const float MIN_TUNE_SETPOINT = 2.0;     // m/s; below this the pitot signal is too small
 // Rough fan sensitivity, PWM per m/s of target. Both tuners use it to guess
-// their PWM levels before they have measured the fan.
+// their PWM levels when no fan map (command: fanmap) covers the target.
 const float FAN_PWM_PER_MPS_ESTIMATE = 8.0;
+
+// Fan tachometer (optional wire; the pin is FAN_TACH_PIN in PlatformConfig.h).
+// PC fans give 2 pulses per revolution (Intel 4-wire specification); for
+// other fans see the data sheet. A wrong value scales the RPM only.
+const int FAN_TACH_PULSES_PER_REV = 2;
+
+// Fan map (command: fanmap). The fan runs at each PWM level from
+// FANMAP_PWM_FIRST to FANMAP_PWM_LAST in steps of FANMAP_PWM_STEP. Each level
+// is held for FANMAP_SETTLE_MS, then the airspeed and the RPM are averaged
+// over FANMAP_MEASURE_MS. In simulation, 10 s left a slow fan (time constant
+// 4.8 s) 0.4 m/s short of steady state; 15 s is about 3 time constants of
+// that fan. 9 levels take 153 s.
+const int FANMAP_PWM_FIRST = 40, FANMAP_PWM_STEP = 25, FANMAP_PWM_LAST = 240;
+const unsigned long FANMAP_SETTLE_MS = 15000;
+const unsigned long FANMAP_MEASURE_MS = 2000;
+const int FANMAP_LEVELS = (FANMAP_PWM_LAST - FANMAP_PWM_FIRST) / FANMAP_PWM_STEP + 1;
+static_assert(FANMAP_LEVELS <= FAN_MAP_MAX_POINTS, "more fan map levels than FAN_MAP_MAX_POINTS");
 
 // Relay auto-tune (Astrom-Hagglund): switch the PWM between a low and a high
 // level whenever the airspeed leaves a band around the target. The resulting
@@ -144,6 +163,12 @@ const int MAX_INVALID_PRESSURE_READS = 5;            // in a row: 1 s without va
 const int NO_AIRFLOW_PWM = 250;                      // "full fan power" in PID mode
 const float NO_AIRFLOW_SPEED = 1.0;                  // m/s
 const unsigned long NO_AIRFLOW_TIMEOUT_MS = 15000;   // driven time without airflow
+// Fan stall, only with a tach signal: PWM at FAN_STALL_PWM or more, but no
+// tach pulses for FAN_STALL_TIMEOUT_MS (fan blocked, no fan power, or the
+// tach wire came off). Below this PWM some fans stop on purpose. The timeout
+// leaves time for slow (soft-start) fans to spin up.
+const int FAN_STALL_PWM = 80;
+const unsigned long FAN_STALL_TIMEOUT_MS = 5000;
 
 // Serial input (one line is collected without blocking loop())
 const size_t SERIAL_LINE_SIZE = 64;      // buffer size incl. the terminating '\0'
@@ -155,9 +180,9 @@ const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
 // Serial output (see SerialOut.h). Routine lines are printed only if they
 // fit completely into the transmit buffer and are skipped otherwise (see
 // serialHasRoom()), so they need a known maximum length.
-// Longest data line with all suffixes and CR LF: 138 characters (7-digit
-// uptime, |P| < 2400 Pa, V < 102 m/s, Temp -100.0, the largest gains,
-// Avg:50, 10-digit Skipped count). The limit must stay below the smallest
+// Longest data line with all suffixes and CR LF: 149 characters (7-digit
+// uptime, |P| < 2400 Pa, V < 102 m/s, Temp -100.0, RPM:15000, the largest
+// gains, Avg:50, 10-digit Skipped count). The limit must stay below the smallest
 // USB transmit buffer (256 bytes), or no data line would ever be printed.
 const int DATA_LINE_MAX_LENGTH = 160;
 const int STATUS_LINE_MAX_LENGTH = 64;   // longest relay switch or cycle line
@@ -182,7 +207,7 @@ float airTemperatureC = 15.0;
 // --- Control ---
 // What loop() does with the fan: closed-loop PID or one of the auto-tuners.
 // Only one mode is active at a time, so tuning and PID never fight over PWM.
-enum ControlMode { MODE_PID, MODE_RELAY_TUNE, MODE_STUNE };
+enum ControlMode { MODE_PID, MODE_RELAY_TUNE, MODE_STUNE, MODE_FANMAP };
 ControlMode controlMode = MODE_PID;
 float currentAirspeed = 0;               // PID input, m/s
 float targetAirspeed = 0;                // PID setpoint, m/s
@@ -191,6 +216,16 @@ int fanPwm = -1;                         // PWM last written to the fan (-1 = ne
 float kp = DEFAULT_KP, ki = DEFAULT_KI, kd = DEFAULT_KD;
 QuickPID myPID(&currentAirspeed, &pidOutput, &targetAirspeed);
 unsigned long noAirflowDrivenMs = 0;     // driven time since airflow was last seen
+unsigned long fanStallMs = 0;            // driven time without tach pulses
+
+// --- Fan map ---
+FanMap fanMap;                           // last usable map; empty until 'fanmap'
+FanMap newFanMap;                        // the map being measured
+int fanMapPwm = 0;                       // PWM of the present level
+unsigned long fanMapLevelStart = 0;
+float fanMapSumAirspeed = 0.0;           // sums over the measurement window
+float fanMapSumRpm = 0.0;
+int fanMapSamples = 0;
 
 // --- Relay auto-tune ---
 bool relayHigh = false;                  // true while the high PWM level is applied
@@ -250,6 +285,12 @@ float clampGain(const char *name, float value, float minValue, float maxValue);
 // Safety checks
 void checkPressureSensor();
 bool checkAirflow(bool fanDriven, const char *fanState);
+bool checkFanStall();
+// Fan map
+void startFanMap();
+void runFanMap();
+void finishFanMap(const char *note);
+int pwmForTarget(bool &fromMap);
 // Auto-tuning
 bool tuneTargetOk();
 void startRelayTune(int pwmLow = -1, int pwmHigh = -1);
@@ -332,6 +373,16 @@ void setup() {
     }
     setFanPwm(0);
 
+    SerialOut.print("[INIT] Fan tachometer... ");
+    if (FAN_TACH_PIN >= 0) {
+        fanTachBegin(FAN_TACH_PIN, FAN_TACH_PULSES_PER_REV);
+        SerialOut.print("pin "); SerialOut.print(FAN_TACH_PIN); SerialOut.print(", ");
+        SerialOut.print(FAN_TACH_PULSES_PER_REV);
+        SerialOut.println(" pulses/rev (optional; RPM shows once pulses arrive)");
+    } else {
+        SerialOut.println("not used (FAN_TACH_PIN -1)");
+    }
+
     calibratePressureSensor(DEFAULT_CALIB_SAMPLES);   // same routine as 'recal'
 
     // PID. loop() calls Compute() exactly once per update interval, so
@@ -387,6 +438,7 @@ void loop() {
     // 1. Sensors: fresh airspeed for both the commands and the controller
     float pressure = readPressureAveraged();
     currentAirspeed = calcAirspeed(pressure, readAirDensity());
+    fanTachUpdate();
 
     // 2. User commands, accepted in every mode (stop must always work)
     ControlMode modeBeforeCommands = controlMode;
@@ -409,8 +461,10 @@ void loop() {
                 break;
             case MODE_RELAY_TUNE: runRelayTune();  break;
             case MODE_STUNE:      break;           // serviced at the top of loop()
+            case MODE_FANMAP:     runFanMap();     break;
         }
     }
+    checkFanStall();
 
     printDataLine(now, pressure);
     warnIfSlowPass(millis() - now - commandTime);
@@ -839,6 +893,29 @@ bool checkAirflow(bool fanDriven, const char *fanState) {
     return true;
 }
 
+// Once per update in every mode, only with a tach signal. The fan is driven
+// at FAN_STALL_PWM or more but gives no tach pulses: it is blocked, has no
+// power, or the tach wire came off. A fan that does not turn moves no air,
+// and in PID mode the controller would raise the PWM to full power. The
+// time counts only while the PWM is that high, so a fan that is still
+// spinning up from standstill is not cut off. Returns true if it stopped
+// the fan (a tune or fan map is aborted).
+bool checkFanStall() {
+    if (!fanTachDetected() || fanPwm < FAN_STALL_PWM || fanTachRpm() > 0) {
+        fanStallMs = 0;
+        return false;
+    }
+    fanStallMs += UPDATE_INTERVAL_MS;
+    if (fanStallMs < FAN_STALL_TIMEOUT_MS) return false;
+    fanStallMs = 0;
+    int stalledPwm = fanPwm;
+    stopAll("fan stalled");
+    SerialOut.print("[ERROR] No fan tachometer pulses at PWM "); SerialOut.print(stalledPwm);
+    SerialOut.print(" for "); SerialOut.print(FAN_STALL_TIMEOUT_MS / 1000);
+    SerialOut.println(" s - check the fan, its power supply and the tach wire");
+    return true;
+}
+
 // ===========================================================================
 // Auto-tuning: relay tune and sTune
 // ===========================================================================
@@ -865,11 +942,12 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     }
 
     bool autoRange = (pwmLow < 0 || pwmHigh < 0);
+    bool fromMap = false;
     if (autoRange) {
-        int estimatedPwm = (int)round(targetAirspeed * FAN_PWM_PER_MPS_ESTIMATE);
-        pwmHigh = constrain(estimatedPwm + RELAY_AUTO_PWM_OFFSET,
+        int centerPwm = pwmForTarget(fromMap);
+        pwmHigh = constrain(centerPwm + RELAY_AUTO_PWM_OFFSET,
                             RELAY_AUTO_HIGH_MIN, RELAY_AUTO_HIGH_MAX);
-        pwmLow = constrain(estimatedPwm - RELAY_AUTO_PWM_OFFSET,
+        pwmLow = constrain(centerPwm - RELAY_AUTO_PWM_OFFSET,
                            RELAY_AUTO_LOW_MIN, RELAY_AUTO_LOW_MAX);
     } else if (pwmLow >= pwmHigh) {
         SerialOut.println("[ERROR] PWM low must be less than PWM high (e.g. tune 40 100)");
@@ -885,7 +963,13 @@ void startRelayTune(int pwmLow, int pwmHigh) {
     SerialOut.println("[RELAY] Method: Astrom-Hagglund relay, Pessen integral rule");
     SerialOut.print("[RELAY] PWM range: "); SerialOut.print(relayPwmLow);
     SerialOut.print(" - "); SerialOut.print(relayPwmHigh);
-    SerialOut.println(autoRange ? " (estimated; if tuning fails try e.g. tune 40 100)" : " (manual)");
+    if (!autoRange) {
+        SerialOut.println(" (manual)");
+    } else if (fromMap) {
+        SerialOut.println(" (from the fan map)");
+    } else {
+        SerialOut.println(" (estimated; run fanmap first, or try e.g. tune 40 100)");
+    }
     SerialOut.print("[RELAY] Hysteresis: +/-"); SerialOut.print(RELAY_HYSTERESIS, 2);
     SerialOut.print(" m/s, cycles needed: "); SerialOut.print(REQUIRED_CYCLES);
     SerialOut.print(", timeout: "); SerialOut.print(RELAY_TIMEOUT_MS / 1000); SerialOut.println(" s");
@@ -1016,9 +1100,13 @@ void startSTune() {
     if (!tuneTargetOk()) return;
 
     // Step PWM (sTune's "outputStep" is the PWM during the step, not the size
-    // of the step): the estimated PWM for the target, within the step limits.
-    float outputStep = constrain(targetAirspeed * FAN_PWM_PER_MPS_ESTIMATE,
+    // of the step): the PWM for the target (fan map or estimate), within the
+    // step limits.
+    bool fromMap = false;
+    float outputStep = constrain((float)pwmForTarget(fromMap),
                                  STUNE_STEP_PWM_MIN, STUNE_STEP_PWM_MAX);
+    SerialOut.print("[sTune] Step PWM for the target: ");
+    SerialOut.println(fromMap ? "from the fan map" : "estimated (run fanmap first for a measured value)");
 
     // The step starts with the fan running, not stopped: near 0 m/s the pitot
     // signal is mostly noise and sTune then finds a wrong dead time. After the
@@ -1065,8 +1153,15 @@ void runSTune() {
 // re-initialised. The fan is stopped before anything is printed.
 void abortTuning(const char *reason) {
     bool wasSTune = (controlMode == MODE_STUNE);
+    bool wasFanMap = (controlMode == MODE_FANMAP);
     controlMode = MODE_PID;
     stopFan();
+    if (wasFanMap) {
+        SerialOut.print("\n[FANMAP] Fan map aborted (");
+        SerialOut.print(reason);
+        SerialOut.println(") - fan stopped, target 0 m/s, previous map kept\n");
+        return;
+    }
     SerialOut.print("\n[TUNE] Tuning aborted (");
     SerialOut.print(reason);
     SerialOut.println(") - fan stopped, target 0 m/s, gains unchanged\n");
@@ -1091,6 +1186,108 @@ void finishTuning(float newKp, float newKi, float newKd) {
     SerialOut.println(" m/s with the new gains");
     SerialOut.print("[TUNE] To reuse these gains later: tune ");
     SerialOut.print(kp, 3); SerialOut.print(" "); SerialOut.print(ki, 3); SerialOut.print(" "); SerialOut.println(kd, 3);
+    SerialOut.println("=====================================\n");
+}
+
+// ===========================================================================
+// Fan map
+// ===========================================================================
+
+// PWM for the present target: from the fan map if it covers the target,
+// else the rough estimate. fromMap tells which.
+int pwmForTarget(bool &fromMap) {
+    int pwm = fanMap.pwmForAirspeed(targetAirspeed);
+    fromMap = (pwm > 0);
+    if (fromMap) return pwm;
+    return (int)round(targetAirspeed * FAN_PWM_PER_MPS_ESTIMATE);
+}
+
+// Start 'fanmap': open loop, fixed PWM levels, target 0 (the PID is idle).
+void startFanMap() {
+    targetAirspeed = 0;
+    newFanMap.clear();
+    fanMapPwm = FANMAP_PWM_FIRST;
+    fanMapLevelStart = millis();
+    fanMapSumAirspeed = 0.0;
+    fanMapSumRpm = 0.0;
+    fanMapSamples = 0;
+    fanStallMs = 0;
+
+    SerialOut.println("\n=====================================");
+    SerialOut.println("[FANMAP] FAN MAP STARTING");
+    SerialOut.println("=====================================");
+    SerialOut.print("[FANMAP] PWM "); SerialOut.print(FANMAP_PWM_FIRST); SerialOut.print(" to ");
+    SerialOut.print(FANMAP_PWM_LAST); SerialOut.print(" in steps of "); SerialOut.print(FANMAP_PWM_STEP);
+    SerialOut.print(", "); SerialOut.print((FANMAP_SETTLE_MS + FANMAP_MEASURE_MS) / 1000);
+    SerialOut.println(" s per level");
+    SerialOut.println(fanTachDetected() ? "[FANMAP] Tachometer: yes (RPM is measured)"
+                                        : "[FANMAP] Tachometer: no pulses yet (RPM shows if they arrive)");
+    SerialOut.println("[FANMAP] Type 0 or stop to abort");
+    SerialOut.println("=====================================");
+    SerialOut.println("  PWM |   RPM | V (m/s) | Gain (m/s per PWM)");
+
+    setFanPwm(fanMapPwm);
+    controlMode = MODE_FANMAP;
+}
+
+// One fan map step per update interval.
+void runFanMap() {
+    // Above the sensor limit the readings are not valid: end the map here and
+    // keep the levels measured so far (the auto-tunes cannot go higher anyway).
+    if (currentAirspeed > maxAirspeed()) {
+        finishFanMap("stopped at the sensor limit");
+        return;
+    }
+
+    unsigned long elapsed = millis() - fanMapLevelStart;
+    if (elapsed < FANMAP_SETTLE_MS) return;
+    fanMapSumAirspeed += currentAirspeed;
+    fanMapSumRpm += fanTachRpm();
+    fanMapSamples++;
+    if (elapsed < FANMAP_SETTLE_MS + FANMAP_MEASURE_MS) return;
+
+    // Level done: store it and print its table row
+    float rpm = fanMapSumRpm / fanMapSamples;
+    newFanMap.add(fanMapPwm, rpm, fanMapSumAirspeed / fanMapSamples);
+    int i = newFanMap.size() - 1;
+    const FanMapPoint &p = newFanMap.point(i);
+    char rpmText[8];
+    if (fanTachDetected()) snprintf(rpmText, sizeof(rpmText), "%5ld", (long)round(p.rpm));
+    else snprintf(rpmText, sizeof(rpmText), "    -");
+    SerialOut.print("  "); SerialOut.print(p.pwm < 100 ? " " : ""); SerialOut.print(p.pwm);
+    SerialOut.print(" | "); SerialOut.print(rpmText);
+    SerialOut.print(p.airspeed < 10.0 ? " |    " : " |   "); SerialOut.print(p.airspeed, 2);   // right-aligned
+    SerialOut.print(" | ");
+    if (i > 0) SerialOut.println(newFanMap.gainAt(i), 3); else SerialOut.println("-");
+
+    fanMapPwm += FANMAP_PWM_STEP;
+    if (fanMapPwm > FANMAP_PWM_LAST) {
+        finishFanMap("all levels measured");
+        return;
+    }
+    setFanPwm(fanMapPwm);
+    fanMapLevelStart = millis();
+    fanMapSumAirspeed = 0.0;
+    fanMapSumRpm = 0.0;
+    fanMapSamples = 0;
+}
+
+// End the map: fan off first, then keep the new map if it is usable.
+void finishFanMap(const char *note) {
+    controlMode = MODE_PID;
+    stopFan();
+    SerialOut.print("[FANMAP] Done ("); SerialOut.print(note); SerialOut.println(") - fan stopped, target 0 m/s");
+    if (!newFanMap.usable(MIN_TUNE_SETPOINT)) {
+        SerialOut.print("[ERROR] Fan map not usable: the airspeed did not reach ");
+        SerialOut.print(MIN_TUNE_SETPOINT, 1);
+        SerialOut.println(" m/s - check the pitot tubes and the fan. Previous map kept.");
+        SerialOut.println("=====================================\n");
+        return;
+    }
+    fanMap = newFanMap;
+    SerialOut.print("[FANMAP] Highest airspeed: "); SerialOut.print(fanMap.maxAirspeed(), 2);
+    SerialOut.println(" m/s. tune and stune now take their PWM levels from this map.");
+    SerialOut.println("[FANMAP] The map is kept until the next reset.");
     SerialOut.println("=====================================\n");
 }
 
@@ -1161,7 +1358,7 @@ void handleCommand(char *line) {
 
     // While a tuner drives the fan, nothing else may change its state.
     if (controlMode != MODE_PID) {
-        SerialOut.println("[BUSY] Tuning in progress - type 0 or stop to abort");
+        SerialOut.println("[BUSY] Tune or fan map in progress - type 0 or stop to abort");
         return;
     }
 
@@ -1186,6 +1383,8 @@ void handleCommand(char *line) {
         }
     } else if (wordIs(cmd, "stune") && count == 1) {
         startSTune();
+    } else if (wordIs(cmd, "fanmap") && count == 1) {
+        startFanMap();
     } else if (wordIs(cmd, "recal")) {
         int samples = DEFAULT_CALIB_SAMPLES;
         if (count > 2 || (count == 2 &&
@@ -1325,6 +1524,8 @@ void printHelp() {
     SerialOut.print(KI_MAX, 0); SerialOut.print(", Kd "); SerialOut.print(KD_MIN, 1); SerialOut.print("-");
     SerialOut.println(KD_MAX, 0);
     SerialOut.println("  stune                sTune step-response auto-tune");
+    SerialOut.println("  fanmap               Measure airspeed and RPM at fixed PWM levels (about 2.5 min)");
+    SerialOut.println("                       The auto-tunes then take their PWM levels from this map");
     SerialOut.print  ("  recal [N]            Stop the fan and re-zero the pressure sensor (N = ");
     SerialOut.print(MIN_CALIB_SAMPLES); SerialOut.print("-"); SerialOut.print(MAX_CALIB_SAMPLES);
     SerialOut.println(" samples)");
@@ -1333,8 +1534,8 @@ void printHelp() {
     SerialOut.println(")");
     SerialOut.println("  help                 Show this list");
     SerialOut.print  ("Auto-tunes need a target of at least "); SerialOut.print(MIN_TUNE_SETPOINT, 1);
-    SerialOut.println(" m/s. During a tune only 0 or stop is accepted.");
-    SerialOut.println("DATA: time | V airspeed | SP target | PWM 0-255 | P pitot Pa | Temp C | Err SP-V");
+    SerialOut.println(" m/s. During a tune or fanmap only 0 or stop is accepted.");
+    SerialOut.println("DATA: time | V airspeed | SP target | PWM 0-255 | P pitot Pa | Temp C | Err SP-V | RPM (with tach)");
 }
 
 // One line per update interval (format in the header comment). The relay
@@ -1349,6 +1550,9 @@ void printDataLine(unsigned long now, float pressure) {
     dataLineCount++;
     if (controlMode == MODE_STUNE) {
         SerialOut.print("[sTune] "); SerialOut.print(sTuner->getStatusString()); SerialOut.print(" | ");
+    } else if (controlMode == MODE_FANMAP) {
+        SerialOut.print("[FANMAP] Level "); SerialOut.print(newFanMap.size() + 1);
+        SerialOut.print("/"); SerialOut.print(FANMAP_LEVELS); SerialOut.print(" | ");
     } else if (controlMode == MODE_RELAY_TUNE) {
         // millis(), not now: a tune started by a command in this pass began after now
         SerialOut.print("[TUNE] "); SerialOut.print((millis() - tuneStartTime) / 1000); SerialOut.print("s | ");
@@ -1362,6 +1566,9 @@ void printDataLine(unsigned long now, float pressure) {
     SerialOut.print(" | P:"); SerialOut.print(pressure, 2);
     SerialOut.print(" | Temp:"); SerialOut.print(airTemperatureC, 1);
     SerialOut.print(" | Err:"); SerialOut.print(targetAirspeed - currentAirspeed, 2);
+    if (fanTachDetected()) {
+        SerialOut.print(" | RPM:"); SerialOut.print((long)round(fanTachRpm()));
+    }
 
     // Every 20th line in PID mode: the active gains and averaging length
     if (dataLineCount % 20 == 0 && controlMode == MODE_PID) {

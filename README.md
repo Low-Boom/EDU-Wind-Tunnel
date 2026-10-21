@@ -17,6 +17,8 @@ Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.
 
 - Closed-loop control of the airspeed with a PID controller (QuickPID), updated every 200 ms.
 - Two auto-tune methods: relay auto-tune (`tune`) and sTune step-response auto-tune (`stune`).
+- Fan map (`fanmap`): measures the airspeed (and the fan RPM) at fixed PWM values. The auto-tunes then take their PWM levels from the measured map.
+- Optional fan tachometer: the fan RPM in the data line, and a stop if the fan stalls.
 - Manual PID gains with one serial command.
 - Air density from the temperature and pressure of the barometric sensor.
 - Zero calibration of the differential pressure sensor at start-up and on command.
@@ -62,6 +64,7 @@ The firmware has these safety functions:
 | Calibration | The start-up calibration and `recal` stop the fan first. | `Fan stopped. Keep the tunnel still:` |
 | No airflow | The fan stops if the airspeed stays below 1.0 m/s for 15 s in total at full power. Full power is a PWM value of 250 or more. During a relay auto-tune, the high PWM level counts as full power. This check does not run during `stune`. | `[STOP] Fan stopped, target 0 m/s (no airflow)` |
 | Pressure sensor fault | After 5 invalid readings in a row (1 s), the fan stops in all modes. | `[STOP] Fan stopped, target 0 m/s (no valid pressure data)` |
+| Fan stall (only with the tach wire) | The fan stops if the PWM value is 80 or more but no tach pulses come for 5 s. This check runs in all modes. | `[ERROR] No fan tachometer pulses at PWM ... for 5 s - check the fan, its power supply and the tach wire` |
 | Airspeed limit | The firmware changes a target above the sensor limit to the limit. The limit is 28.0 m/s, or less in dense (cold) air. | `[WARN] Capping at 28.00 m/s (sensor limit in the present air)` |
 | Over-speed during an auto-tune | An airspeed above 28.0 m/s stops the auto-tune and the fan. | `[TUNE] Tuning aborted (airspeed above MAX_AIRSPEED) - fan stopped, target 0 m/s, gains unchanged` |
 | Sensor fault at start-up | The firmware halts with the fan off. The board LED blinks if the board has an `LED_BUILTIN` (see [HARDWARE.md](HARDWARE.md#check-the-sensors-at-start-up)). | `[FATAL] System halted with the fan off. Fix the fault and reset the board.` |
@@ -169,6 +172,7 @@ Type one command on a line. Then send the line (press Enter).
 | `tune <low> <high>` | Relay auto-tune with your PWM levels, for example `tune 40 100`. | Same as `tune`. Whole numbers 1-255. `<low>` must be less than `<high>`. |
 | `tune <Kp> <Ki> <Kd>` | Sets the PID gains, for example `tune 20 8 12`. | Kp more than 0, Ki and Kd 0 or more. Values outside Kp 1-100, Ki 0.1-50, Kd 0.1-50 change to the nearest limit. |
 | `stune` | sTune step-response auto-tune. | Set a target airspeed of at least 2.0 m/s first. |
+| `fanmap` | Fan map: runs the fan at PWM 40, 65, ... 240 (17 s each) and shows the airspeed and the RPM at each value. Then `tune` and `stune` take their PWM levels from this map. | About 2.5 min. Sets the target airspeed to 0, and stops the fan at the end. Ends early at the sensor limit. The map is lost at a reset. See [TUNING_GUIDE.md](TUNING_GUIDE.md#fan-map-fanmap). |
 | `recal` or `recal <N>` | Stops the fan, waits 15 s, and takes `<N>` samples for a new zero offset. The target airspeed stays 0. | `<N>` = 5-100, default 50. The firmware reads no commands during `recal`. |
 | `avg <N>` | Sets the length of the moving average of the pressure. | 1-50, default 5. A longer average adds delay to the control loop. |
 | `help` | Shows the command list. | |
@@ -178,7 +182,7 @@ Rules:
 - Keywords are not case-sensitive (`Stop`, `TUNE`). Spaces or tabs separate the words.
 - Type numbers as plain decimals: `12`, `-3`, `7.5`. The firmware does not accept `1e3`, `10abc`, or `1,5`.
 - A line can have 63 characters or fewer. The firmware ignores a longer line and shows `[ERROR] Line too long (max 63 characters) - ignored`.
-- During an auto-tune, the firmware accepts only `0` or `stop`. Other commands (also `help`) get `[BUSY] Tuning in progress - type 0 or stop to abort`.
+- During an auto-tune or `fanmap`, the firmware accepts only `0` or `stop`. Other commands (also `help`) get `[BUSY] Tune or fan map in progress - type 0 or stop to abort`.
 - The firmware reads commands once per update (200 ms).
 - The firmware does not store the gains or the averaging length. After a reset, it uses the defaults again (see [Configuration](#configuration)). After an auto-tune, the firmware shows a command that sets the same gains again, for example `[TUNE] To reuse these gains later: tune 16.851 7.263 14.660`.
 
@@ -210,6 +214,7 @@ Example (simulation, target airspeed 10 m/s):
 | `P:` | Averaged differential pressure minus the calibration offset. Small negative values with no airflow are normal. | Pa |
 | `Temp:` | Air temperature from the barometric sensor | deg C |
 | `Err:` | `SP` minus `V` | m/s |
+| `RPM:` | Fan speed from the tach wire. Only shown after the first tach pulse. | RPM |
 
 Additional parts at the end of a data line:
 
@@ -218,14 +223,15 @@ Additional parts at the end of a data line:
 
 On these ports, the firmware waits at most 50 ms for the computer to read. Other text that does not fit into the transmit buffer in this time is lost. When the computer reads again, the next text starts with `[WARN] <n> bytes of output lost: the host did not read`.
 
-During an auto-tune, the data lines start differently:
+During an auto-tune or `fanmap`, the data lines start differently:
 
 ```
 [TUNE] 16s | Cycle:2 | V:10.55 | SP:10.00 | PWM:60 | P:66.97 | Temp:20.0 | Err:-0.55
 [sTune] SETTLING | V:9.97 | SP:10.00 | PWM:48 | P:59.88 | Temp:20.0 | Err:0.03
+[FANMAP] Level 3/9 | V:10.56 | SP:0.00 | PWM:90 | P:67.13 | Temp:20.0 | Err:-10.56 | RPM:1059
 ```
 
-`[TUNE] <t>s` is the time since the start of the relay auto-tune. `Cycle:` is the number of valid cycles. `[sTune]` shows the phase: `SETTLING` or `TESTING`.
+`[TUNE] <t>s` is the time since the start of the relay auto-tune. `Cycle:` is the number of valid cycles. `[sTune]` shows the phase: `SETTLING` or `TESTING`. `[FANMAP] Level` is the PWM level that `fanmap` measures.
 
 Most other lines start with a tag, for example `[SERIAL]`, `[STOP]`, `[WARN]`, `[ERROR]`, or `[FATAL]`. Each line ends with CR LF.
 
@@ -246,6 +252,11 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
 | `FAN_PWM_PIN` | `PlatformConfig.h` | 6 (ESP32-P4), 9 (Uno R4) | Fan PWM output pin. |
 | `I2C_SDA_PIN`, `I2C_SCL_PIN` | `PlatformConfig.h` | -1 | -1 = the default I2C pins of the selected board. Change them only on the ESP32-P4. On the Uno R4 they must stay -1. |
 | `FAN_PWM_FREQUENCY_HZ` | `PlatformConfig.h` | 25000 (ESP32-P4), 0 (Uno R4) | Fan PWM frequency in Hz. 0 = core default (490 Hz on the Uno R4). |
+| `FAN_TACH_PIN` | `PlatformConfig.h` | 5 (ESP32-P4), 2 (Uno R4) | Input for the fan tach wire. -1 = not used. The firmware works without the tach wire. |
+| `FAN_TACH_PULSES_PER_REV` | `EDU-Wind-Tunnel.ino` | 2 | Tach pulses per fan revolution (2 for PC fans). A wrong value changes only the RPM value. |
+| `FAN_STALL_PWM`, `FAN_STALL_TIMEOUT_MS` | `EDU-Wind-Tunnel.ino` | 80, 5000 ms | Fan stall check: PWM value and time without tach pulses. |
+| `FANMAP_PWM_FIRST`, `FANMAP_PWM_STEP`, `FANMAP_PWM_LAST` | `EDU-Wind-Tunnel.ino` | 40, 25, 240 | PWM levels of `fanmap`. |
+| `FANMAP_SETTLE_MS`, `FANMAP_MEASURE_MS` | `EDU-Wind-Tunnel.ino` | 15000 ms, 2000 ms | Time per `fanmap` level: settle, then measure. |
 
 [TUNING_GUIDE.md](TUNING_GUIDE.md#settings) gives the auto-tune settings (for example `STUNE_METHOD`). [HARDWARE.md](HARDWARE.md#pin-assignments) describes the pins.
 
@@ -263,7 +274,9 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
 | `V` shows a small value (for example `V:0.90`) with the fan stopped | Pressure noise near 0 Pa | This is normal. Type `recal` to zero the sensor again. |
 | The airspeed reading is noisy. | Short moving average | Type a larger value, for example `avg 10`. A longer average slows the control loop and can make it oscillate. Then reduce the gains or tune again (see [TUNING_GUIDE.md](TUNING_GUIDE.md#averaging-delay)). |
 | The airspeed oscillates around the target | The gains are too high for your fan. | Run `tune` or `stune`, or set lower gains. See [TUNING_GUIDE.md](TUNING_GUIDE.md#troubleshooting-by-symptom). |
-| `[TUNE] Tuning aborted (relay tune timeout) - ...` | The two PWM levels do not give airspeeds above and below the target. | Give the PWM levels, for example `tune 40 100`. See [TUNING_GUIDE.md](TUNING_GUIDE.md#relay-auto-tune-tune). |
+| `[TUNE] Tuning aborted (relay tune timeout) - ...` | The two PWM levels do not give airspeeds above and below the target. | Run `fanmap`, then `tune` again. Or give the PWM levels, for example `tune 40 100`. See [TUNING_GUIDE.md](TUNING_GUIDE.md#relay-auto-tune-tune). |
+| `[STOP] Fan stopped, target 0 m/s (fan stalled)` | The fan does not turn (blocked, no power), or the tach wire came off. | Check the fan, its power supply and the tach wire. See [HARDWARE.md](HARDWARE.md#fan-tachometer). |
+| No `RPM:` in the data lines | The tach wire is not connected, or the fan has not turned since the start. | This is normal without the tach wire. Else check the wiring (see [HARDWARE.md](HARDWARE.md#fan-tachometer)). |
 | Commands have no effect | Incorrect speed, or (Arduino IDE) a change to **No Line Ending** after a line ending | Set 115200 baud. Reset the board. |
 
 ## Known Issues
@@ -273,6 +286,7 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
   - The line has more than 63 characters (also a line that starts with `stop`).
   - `recal` runs (about 23 s with 50 samples). The fan is already stopped.
   - The firmware halted after a `[FATAL]` message. The fan is off.
+- The firmware does not store the fan map. Run `fanmap` again after a reset.
 - Each `stune` run loses at least 16 bytes of heap memory (a known problem of the sTune 2.4.0 library). Many runs fit into memory. A reset frees the memory.
 
 ## Serial control from an Android phone

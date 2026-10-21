@@ -14,6 +14,8 @@ EDU-Wind-Tunnel/                 # Firmware source: PlatformIO src_dir, also an 
                                  #   relay auto-tune, serial commands, output
   PlatformConfig.h               # Board selection: pins, PWM frequency, SERIAL_TX_CAN_BLOCK; #error for other boards
   SerialOut.h/.cpp               # All text output: bounded wait on a native USB port, serialHasRoom()
+  FanTach.h/.cpp                 # Optional fan tachometer: ISR pulse count, RPM, detection
+  FanMap.h/.cpp                  # Measured fan map (PWM -> RPM, airspeed), PWM for a target airspeed
   I2CScanner.h/.cpp              # Scans Wire (and Wire1 on the Uno R4 WiFi), device registry, direct probe
   STunePIDTuner.h/.cpp           # Wrapper around sTune 2.4.0 (step test, unit conversion, e-stop, report)
 .github/workflows/compile-sketch.yml  # CI "Compile sketch" (PlatformIO and Arduino builds)
@@ -65,15 +67,16 @@ The versions are pinned in `platformio.ini` (`lib_deps`) and in `.github/workflo
 
 1. If `controlMode == MODE_STUNE`, call `runSTune()` on every pass (sTune keeps its own sample timing).
 2. Once per `UPDATE_INTERVAL_MS` (200 ms):
-   1. `readPressureAveraged()` and `calcAirspeed(pressure, readAirDensity())` -> `currentAirspeed`.
+   1. `readPressureAveraged()` and `calcAirspeed(pressure, readAirDensity())` -> `currentAirspeed`; `fanTachUpdate()` -> RPM.
    2. `pollSerialCommands()` -> `endSerialLine()` -> `handleCommand()`.
    3. `checkPressureSensor()` (after the commands, so a new target is cancelled before it acts).
-   4. Control, only if the mode did not change in this pass: `MODE_PID` -> `runPidControl()` + `checkAirflow(fanPwm >= NO_AIRFLOW_PWM, "full fan power")`; `MODE_RELAY_TUNE` -> `runRelayTune()`.
-   5. `printDataLine()` and `warnIfSlowPass()`.
+   4. Control, only if the mode did not change in this pass: `MODE_PID` -> `runPidControl()` + `checkAirflow(fanPwm >= NO_AIRFLOW_PWM, "full fan power")`; `MODE_RELAY_TUNE` -> `runRelayTune()`; `MODE_FANMAP` -> `runFanMap()`.
+   5. `checkFanStall()` in every mode (only with a tach signal).
+   6. `printDataLine()` and `warnIfSlowPass()`.
 
-Main state: `targetAirspeed` (setpoint), `currentAirspeed` (input), `pidOutput` (PID output, also written by the tuners), `fanPwm` (PWM last written, -1 = never), `kp`/`ki`/`kd`, `controlMode` (`MODE_PID`, `MODE_RELAY_TUNE`, `MODE_STUNE`), `pressureAverageSamples`, `pressureOffset`, `invalidPressureReads`, `airDensity`, `airTemperatureC`, `noAirflowDrivenMs`, `myPID` (QuickPID), `sTuner` (`STunePIDTuner *`).
+Main state: `targetAirspeed` (setpoint), `currentAirspeed` (input), `pidOutput` (PID output, also written by the tuners), `fanPwm` (PWM last written, -1 = never), `kp`/`ki`/`kd`, `controlMode` (`MODE_PID`, `MODE_RELAY_TUNE`, `MODE_STUNE`, `MODE_FANMAP`), `fanMap` (last usable map) and `newFanMap` (map being measured), `fanStallMs`, `pressureAverageSamples`, `pressureOffset`, `invalidPressureReads`, `airDensity`, `airTemperatureC`, `noAirflowDrivenMs`, `myPID` (QuickPID), `sTuner` (`STunePIDTuner *`).
 
-Key functions: `setFanPwm()`, `setFanPwmRateLimited()`, `stopFan()`, `stopAll(reason)`, `pidBumplessStart()`, `applyGains()`, `clampGain()`, `startRelayTune()`, `completeRelayTune()`, `startSTune()`, `abortTuning(reason)`, `finishTuning()`, `calibratePressureSensor()`, `setPressureAverageSamples()`, `setTargetAirspeed()`, `setManualGains()`, `maxAirspeed()`, `printHelp()`, `haltWithError()`. In the helpers: `scanAllI2CBuses()`, `getDeviceBus()`, `probeDeviceBus()`; `STunePIDTuner::startTuning()`, `update()`, `getTunedGains()`, `printReport()`, `reset()`.
+Key functions: `setFanPwm()`, `setFanPwmRateLimited()`, `stopFan()`, `stopAll(reason)`, `pidBumplessStart()`, `applyGains()`, `clampGain()`, `startRelayTune()`, `completeRelayTune()`, `startSTune()`, `startFanMap()`, `runFanMap()`, `finishFanMap()`, `pwmForTarget()` (fan map, else `FAN_PWM_PER_MPS_ESTIMATE`), `checkFanStall()`, `abortTuning(reason)` (also ends a fan map), `finishTuning()`, `calibratePressureSensor()`, `setPressureAverageSamples()`, `setTargetAirspeed()`, `setManualGains()`, `maxAirspeed()`, `printHelp()`, `haltWithError()`. In the helpers: `scanAllI2CBuses()`, `getDeviceBus()`, `probeDeviceBus()`; `STunePIDTuner::startTuning()`, `update()`, `getTunedGains()`, `printReport()`, `reset()`.
 
 Settings are `const` values in the "Settings" section at the top of the `.ino` (for example `MAX_AIRSPEED`, `UPDATE_INTERVAL_MS`, `DEFAULT_AVG_SAMPLES`, `DEFAULT_KP`/`DEFAULT_KI`/`DEFAULT_KD`, `MAX_PWM_CHANGE_PER_CYCLE`, `STUNE_METHOD`). Board settings are `#define`s in `PlatformConfig.h`. Runtime changes (`tune`, `avg`) are not stored; there is no EEPROM or Preferences code.
 
@@ -86,8 +89,9 @@ Settings are `const` values in the "Settings" section at the top of the `.ino` (
 - **No QuickPID `Reset()`.** It zeroes the integral and drops the output to about 0. Re-initialise with `pidBumplessStart()` (manual -> timer). Change gains only through `applyGains()` (finite check, clamp to `KP_MIN`..`KD_MAX`, `SetTunings()` keeps the integral).
 - **QuickPID configuration stays as is:** timer mode, one `Compute()` per update, `SetSampleTimeUs(UPDATE_INTERVAL_MS * 1000)`, `pOnMeas`, `dOnMeas`, `iAwClamp` (not `iAwCondition`, which is flawed in 3.1.9), output limits fixed at 0-255. The PWM rate limit acts around `Compute()` (`GetOutputSum()`/`SetOutputSum()` plus `setFanPwmRateLimited()`), never through `SetOutputLimits()`.
 - **Calibration stops the fan.** `calibratePressureSensor()` calls `stopFan()` first, waits `CALIBRATION_SETTLE_S`, and keeps the old offset if fewer than half of the samples are valid. Any airflow during calibration would become the zero, so never start the fan in or around it. Invalid readings never enter the moving average.
-- **One control mode at a time.** While a tuner runs, every command except stop gets `[BUSY] Tuning in progress - type 0 or stop to abort`.
-- **Safety checks stay active:** `checkPressureSensor()` (5 invalid readings, code `LWLP_INVALID_CODE` 0x3FFF), `checkAirflow()` (PID mode and relay HIGH level), relay over-speed abort and the sTune wrapper e-stop at `MAX_AIRSPEED`, target cap at `maxAirspeed()`, fatal halt with the fan off in `haltWithError()`.
+- **One control mode at a time.** While a tuner or `fanmap` runs, every command except stop gets `[BUSY] Tune or fan map in progress - type 0 or stop to abort`.
+- **The tach wire is optional.** Every tach function must do nothing until `fanTachDetected()` is true (pulses arrived). Without the wire the firmware must work as before. The tach ISR (`FanTach.cpp`) only counts; all calculation is in `fanTachUpdate()`.
+- **Safety checks stay active:** `checkPressureSensor()` (5 invalid readings, code `LWLP_INVALID_CODE` 0x3FFF), `checkAirflow()` (PID mode and relay HIGH level), `checkFanStall()` (tach only, all modes), relay over-speed abort and the sTune wrapper e-stop at `MAX_AIRSPEED`, target cap at `maxAirspeed()`, fatal halt with the fan off in `haltWithError()`.
 - **Board support only in `PlatformConfig.h`.** Keep the `#error` for unsupported boards. Do not put board pins in the `.ino`.
 - **Strict input parsing.** Parse user numbers only with `parseDecimal()` / `parseWholeNumber()`. Do not use `atof()`, `toFloat()` or `toInt()` directly on typed text.
 - **sTune wrapper.** Each run builds a new sTune object in zero-filled storage (sTune 2.4.0 leaves members uninitialised and latches its e-stop). Call `Configure()` once per run: sTune leaks at least 16 bytes of heap per run (75 samples).
@@ -96,9 +100,9 @@ Settings are `const` values in the "Settings" section at the top of the `.ino` (
 
 - One command per line, LF, CR or CR+LF. Until the first CR or LF since reset, a line also ends after `SERIAL_LINE_TIMEOUT_MS` (1000 ms) without a new character (`lineEndingSeen`).
 - Max 63 characters (`SERIAL_LINE_SIZE` 64), max 4 words (`MAX_COMMAND_WORDS`). Keywords are case-insensitive (`wordIs()`).
-- Commands: `<m/s>`, `0`/`stop`, `tune`, `tune <low> <high>`, `tune <Kp> <Ki> <Kd>`, `stune`, `recal [N]`, `avg <N>`, `help`.
-- Data line: `<t>s | V:<m/s> | SP:<m/s> | PWM:<0-255> | P:<Pa> | Temp:<C> | Err:<m/s>`, with ` | Kp:.. Ki:.. Kd:.. Avg:N` every 20th line in PID mode and ` | Skipped:<n>` after skipped lines. Users log and parse this format: change it only on purpose and update the README.
-- Message tags: `[INIT]`, `[I2C]`, `[CALIB]`, `[READY]`, `[SERIAL]`, `[CONFIG]`, `[PID]`, `[STOP]`, `[TUNE]`, `[RELAY]`, `[sTune]`, `[BUSY]`, `[WARN]`, `[ERROR]`, `[FATAL]`. Serial output is ASCII only.
+- Commands: `<m/s>`, `0`/`stop`, `tune`, `tune <low> <high>`, `tune <Kp> <Ki> <Kd>`, `stune`, `fanmap`, `recal [N]`, `avg <N>`, `help`.
+- Data line: `<t>s | V:<m/s> | SP:<m/s> | PWM:<0-255> | P:<Pa> | Temp:<C> | Err:<m/s>`, then ` | RPM:<n>` once tach pulses have arrived, ` | Kp:.. Ki:.. Kd:.. Avg:N` every 20th line in PID mode and ` | Skipped:<n>` after skipped lines. Users log and parse this format: change it only on purpose and update the README.
+- Message tags: `[INIT]`, `[I2C]`, `[CALIB]`, `[READY]`, `[SERIAL]`, `[CONFIG]`, `[PID]`, `[STOP]`, `[TUNE]`, `[RELAY]`, `[sTune]`, `[FANMAP]`, `[BUSY]`, `[WARN]`, `[ERROR]`, `[FATAL]`. Serial output is ASCII only.
 
 ## How to check a build
 

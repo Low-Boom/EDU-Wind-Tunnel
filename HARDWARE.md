@@ -96,7 +96,7 @@ Change them there only if your wiring is different.
 | Fan PWM | GPIO 6 | `FAN_PWM_PIN`. 25 kHz, 3.3 V logic. |
 | I2C SDA | GPIO 7 (default) | `I2C_SDA_PIN` = -1 uses the default pin of the board that you select in the IDE. **ESP32P4 Dev Module**: GPIO 7 (also for the Waveshare boards). |
 | I2C SCL | GPIO 8 (default) | `I2C_SCL_PIN` = -1. **ESP32P4 Dev Module**: GPIO 8 (also for the Waveshare boards). |
-| Fan tachometer | Not used | You can leave the tach wire unconnected. |
+| Fan tachometer (optional) | GPIO 5 | `FAN_TACH_PIN`. See [Fan tachometer](#fan-tachometer). Any free GPIO of 36 or lower, not 14-19. |
 | Serial | USB | 115200 baud |
 
 CAUTION: Do not use GPIO 14-19. On boards with an ESP32-C6 WiFi chip (for example the Waveshare boards), these pins carry the SDIO link to that chip.
@@ -132,7 +132,7 @@ With correct pins, the start-up message is `[INIT] I2C bus... OK (SDA 53, SCL 54
 | Fan PWM | D9 | `FAN_PWM_PIN`. Core default frequency 490 Hz, 5 V logic. |
 | I2C SDA / SCL (bus `Wire`) | SDA and SCL header pins (same signals as A4 / A5) | Fixed by the board. Leave `I2C_SDA_PIN` and `I2C_SCL_PIN` at -1. The start-up message shows them as `SDA 18, SCL 19`. |
 | Qwiic connector (bus `Wire1`) | Qwiic | Uno R4 WiFi only. 3.3 V. |
-| Fan tachometer | Not used | The images show it on D2. You do not need this wire. |
+| Fan tachometer (optional) | D2 | `FAN_TACH_PIN`, as the images show. See [Fan tachometer](#fan-tachometer). |
 | Serial | USB | 115200 baud |
 
 NOTE: The Uno R4 uses the core default PWM frequency of 490 Hz. The Intel specification for 4-pin fans uses 25 kHz.
@@ -192,6 +192,40 @@ With a level shifter, connect it on the LV side.
   Do this only if the board documentation allows that voltage on VIN.
   If not, power the board from USB and connect only GND to the fan supply.
 
+### Fan tachometer
+
+The tach wire is optional. The firmware works without it. With it, the firmware:
+
+- shows the fan speed in the data lines (` | RPM:<n>`),
+- adds the RPM to the `fanmap` table,
+- stops the fan if it stalls: PWM value 80 or more, but no tach pulses for 5 s.
+
+Connect the tach wire of the fan to `FAN_TACH_PIN`: GPIO 5 on the ESP32-P4, D2 on the Uno R4.
+
+- 4-pin PC fan: pin 3 of the fan connector (Intel 4-wire specification: 1 GND, 2 +12 V, 3 tach, 4 PWM). The wire color is different from fan to fan; refer to the fan datasheet.
+- AC Infinity fan: the `TAC` terminal (see [AC Infinity terminal block](#ac-infinity-terminal-block)).
+
+The tach output of a 4-pin PC fan is open collector: it only pulls the line to GND, two times per revolution.
+The firmware turns on the internal pull-up resistor of the input pin, so the high level is the logic voltage of the board.
+
+CAUTION: Some fans put their own voltage on the tach line. A voltage above the logic voltage of the board (3.3 V on the ESP32-P4, 5 V on the Uno R4) can damage the input.
+Before you connect the tach wire to the board, do this check:
+
+1. Supply power to the fan. Do not connect the tach wire to the board.
+2. Measure the voltage between the tach wire and GND.
+3. If the voltage is 0 V or less than the logic voltage of the board, connect the tach wire directly to `FAN_TACH_PIN`.
+4. If the voltage is more than the logic voltage of the board, connect the tach wire through a free channel of the level shifter (fan on the HV side, board on the LV side). The channel must work in both directions (for example a BSS138 level shifter board).
+
+This guide does not give the tach voltage of the AC Infinity fans. It was not measured. Do the check above.
+
+To check the tach signal:
+
+1. Set a target airspeed, for example `5`.
+2. Make sure that the data lines show ` | RPM:<n>`.
+3. Compare the RPM with the fan datasheet. If the value is two times or half the correct value, change `FAN_TACH_PULSES_PER_REV` in `EDU-Wind-Tunnel.ino`.
+
+The firmware ignores pulses that come less than 2 ms after the last pulse (electrical noise from the PWM signal). This is 15000 RPM at 2 pulses per revolution.
+
 ### 12 V PC fan (140 mm tunnel)
 
 PC fans use the 5 V PWM standard (see the Noctua white paper above).
@@ -225,7 +259,7 @@ WARNING: The terminal block also has the mains connections (AC HOT, AC NEU, AC G
 3. Connect the PWM wire of your 4-pin cable to the `PWM` terminal.
 4. Connect the GND wire to the `GND` terminal.
 5. Connect the power wire to the `+10V` terminal. This supplies the HV side of the level shifter.
-6. You can leave the `TAC` terminal (tachometer) unconnected.
+6. Optional: connect the `TAC` terminal (tachometer) to the tach wire of your 4-pin cable. Read [Fan tachometer](#fan-tachometer) first: measure its voltage before you connect it to the board.
 
 NOTE: Some newer AC Infinity models do not have this terminal block. The wire colors appear to be the same. You can add your own terminal block.
 
