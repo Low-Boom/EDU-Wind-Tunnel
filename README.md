@@ -2,7 +2,7 @@
 
 Firmware for a microcontroller board that keeps the airspeed in a small educational wind tunnel at a target value.
 
-Developed by [Louis M. Edelman](https://www.researchgate.net/profile/Louis-Edelman) and Olivia Coulon.
+Developed by [Louis M. EDELMAN](https://www.researchgate.net/profile/Louis-Edelman), Masato ISHII Olivia COULON.
 
 Debugging assistance provided by Anthropic Claude Sonnet 4.5 and verified by humans. Claude Code (Anthropic) helped with the version 1.4 changes. For their test status, see [Limitations](#limitations).
 
