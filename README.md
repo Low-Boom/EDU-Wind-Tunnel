@@ -4,8 +4,6 @@ Firmware for a microcontroller board that keeps the airspeed in a small educatio
 
 Developed by [Louis M. EDELMAN](https://www.researchgate.net/profile/Louis-Edelman), Masato ISHII, Olivia COULON.
 
-Debugging assistance provided by Anthropic Claude Sonnet 4.5 and verified by humans. Claude Code (Anthropic) helped with the version 1.4 changes. For their test status, see [Limitations](#limitations).
-
 Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/).
 
 [![Version](https://img.shields.io/badge/version-1.4-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
