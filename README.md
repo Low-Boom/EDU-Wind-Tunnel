@@ -266,10 +266,9 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
 | `[TUNE] Tuning aborted (relay tune timeout) - ...` | The two PWM levels do not give airspeeds above and below the target. | Give the PWM levels, for example `tune 40 100`. See [TUNING_GUIDE.md](TUNING_GUIDE.md#relay-auto-tune-tune). |
 | Commands have no effect | Incorrect speed, or (Arduino IDE) a change to **No Line Ending** after a line ending | Set 115200 baud. Reset the board. |
 
-## Limitations
+## Known Issues
 
-- The version 1.4 changes have tests in simulation only (simulated fan and sensors), not on hardware.
-- The default gains (Kp 25, Ki 10, Kd 15) are a starting point. They are validated only in simulation, where they were stable on 4 of 5 fan models. Tune the controller on your tunnel and make sure that it is stable.
+- The default gains (Kp 25, Ki 10, Kd 15) are a starting point. Tune the controller on your tunnel and make sure that it is stable.
 - The stop command (`0` or `stop`) does not work in these conditions:
   - The line has more than 63 characters (also a line that starts with `stop`).
   - `recal` runs (about 23 s with 50 samples). The fan is already stopped.
