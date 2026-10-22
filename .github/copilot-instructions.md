@@ -2,7 +2,7 @@
 
 ## Project overview
 
-Arduino firmware (version 1.4, `FIRMWARE_VERSION` in the `.ino`) that holds the airspeed of a small educational wind tunnel at a target value. A DFRobot SEN0343 (LWLP5000) differential pressure sensor measures the room air against a static pressure ring in the test section. A DFRobot SEN0665 (BMP585) barometric sensor gives the air density. QuickPID drives the fan with a PWM value (0-255). Two auto-tuners (relay and sTune) find PID gains. All control is through serial commands at 115200 baud.
+Arduino firmware (version 1.4.1, `FIRMWARE_VERSION` in the `.ino`) that holds the airspeed of a small educational wind tunnel at a target value. A DFRobot SEN0343 (LWLP5000) differential pressure sensor measures the room air against a static pressure ring in the test section. A DFRobot SEN0665 (BMP585) barometric sensor gives the air density. QuickPID drives the fan with a PWM value (0-255). Two auto-tuners (relay and sTune) find PID gains. All control is through serial commands at 115200 baud.
 
 Readers of the docs and the serial messages are students, teachers, and makers. Some are not native English speakers.
 

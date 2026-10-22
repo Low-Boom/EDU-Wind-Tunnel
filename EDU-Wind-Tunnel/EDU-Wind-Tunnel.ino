@@ -34,7 +34,7 @@
 // Settings
 // ===========================================================================
 
-const char FIRMWARE_VERSION[] = "1.4";
+const char FIRMWARE_VERSION[] = "1.4.1";
 
 // Highest target. The LWLP5000 is rated to 500 Pa, which is 28.6 m/s at
 // sea-level air density (1.225 kg/m3); above that the reading is not valid.

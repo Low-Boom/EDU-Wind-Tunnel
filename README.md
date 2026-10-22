@@ -6,7 +6,7 @@ Developed by [Louis M. EDELMAN](https://www.researchgate.net/profile/Louis-Edelm
 
 Developed for use with the [Modular Wind Tunnel for STEM Education](https://www.printables.com/@JerrodH) by [Jerrod Hofferth](https://jerrod.hofferth.net/).
 
-[![Version](https://img.shields.io/badge/version-1.4-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
+[![Version](https://img.shields.io/badge/version-1.4.1-brightgreen.svg)](https://github.com/Low-Boom/EDU-wind-tunnel/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![ESP32-P4](https://img.shields.io/badge/ESP32--P4-supported-E7352C?logo=espressif)](https://www.waveshare.com/product/arduino/boards-kits/esp32-p4/esp32-p4-wifi6-touch-lcd-7b.htm)
 [![Uno R4](https://img.shields.io/badge/Arduino-Uno%20R4-00979D?logo=arduino)](https://store-usa.arduino.cc/pages/uno-r4)
@@ -52,7 +52,7 @@ You also need:
 
 **WARNING:** Start with a low target airspeed (2 to 5 m/s). Increase it in small steps.
 
-**WARNING:** To stop the fan, type `0` or `stop` and send the line. This also stops a running auto-tune. Some exceptions apply (see [Limitations](#limitations)). If the serial connection does not work, disconnect the fan power supply.
+**WARNING:** To stop the fan, type `0` or `stop` and send the line. This also stops a running auto-tune. Some exceptions apply (see [Known Issues](#known-issues)). If the serial connection does not work, disconnect the fan power supply.
 
 The firmware has these safety functions:
 
@@ -104,7 +104,7 @@ PlatformIO is the recommended tool. `platformio.ini` sets the board package, the
 
     ```
     =====================================
-       EDU Wind Tunnel PID Controller v1.4
+       EDU Wind Tunnel PID Controller v1.4.1
        Board: ESP32-P4
     [...]
     [INIT] I2C bus... OK (SDA 7, SCL 8, 100 kHz)
