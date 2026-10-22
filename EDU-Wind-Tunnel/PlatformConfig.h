@@ -44,7 +44,7 @@
   // numbers here only if your sensors are wired to other pins.
   #define I2C_SDA_PIN           -1
   #define I2C_SCL_PIN           -1
-  #define FAN_PWM_PIN           6
+  #define FAN_PWM_PIN           4
   // 25 kHz is the PWM frequency of 4-pin PC fans (Intel spec) and is above
   // human hearing; the core's 1 kHz default can make fans whine.
   #define FAN_PWM_FREQUENCY_HZ  25000

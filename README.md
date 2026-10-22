@@ -243,7 +243,7 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
 | `KP_MIN`, `KP_MAX`, `KI_MIN`, `KI_MAX`, `KD_MIN`, `KD_MAX` | `EDU-Wind-Tunnel.ino` | 1.0-100.0, 0.1-50.0, 0.1-50.0 | Gain limits for `tune <Kp> <Ki> <Kd>` and both auto-tunes. |
 | `MAX_PWM_CHANGE_PER_CYCLE` | `EDU-Wind-Tunnel.ino` | 25 | Largest change of the PWM value per update in PID mode. |
 | `MIN_TUNE_SETPOINT` | `EDU-Wind-Tunnel.ino` | 2.0 m/s | Lowest target airspeed for `tune` and `stune`. |
-| `FAN_PWM_PIN` | `PlatformConfig.h` | 6 (ESP32-P4), 9 (Uno R4) | Fan PWM output pin. |
+| `FAN_PWM_PIN` | `PlatformConfig.h` | 4 (ESP32-P4), 9 (Uno R4) | Fan PWM output pin. |
 | `I2C_SDA_PIN`, `I2C_SCL_PIN` | `PlatformConfig.h` | -1 | -1 = the default I2C pins of the selected board. Change them only on the ESP32-P4. On the Uno R4 they must stay -1. |
 | `FAN_PWM_FREQUENCY_HZ` | `PlatformConfig.h` | 25000 (ESP32-P4), 0 (Uno R4) | Fan PWM frequency in Hz. 0 = core default (490 Hz on the Uno R4). |
 

@@ -42,7 +42,7 @@ PlatformIO is the primary build; the Arduino IDE is the alternative. Keep both w
 
 Board facts used by the code:
 
-- ESP32-P4: `FAN_PWM_PIN` 6, `FAN_PWM_FREQUENCY_HZ` 25000, I2C pins -1 (the selected board's default: SDA 7 / SCL 8 on the ESP32P4 Dev Module, 53 / 54 on the M5Tab5 board entry). Do not use GPIO 14-19 (SDIO link to the on-board ESP32-C6). `SERIAL_TX_CAN_BLOCK` is 1 only with USB CDC on boot (`-DARDUINO_USB_CDC_ON_BOOT=1` in PlatformIO `build_flags`, "USB CDC On Boot: Enabled" in the Arduino IDE).
+- ESP32-P4: `FAN_PWM_PIN` 4, `FAN_PWM_FREQUENCY_HZ` 25000, I2C pins -1 (the selected board's default: SDA 7 / SCL 8 on the ESP32P4 Dev Module, 53 / 54 on the M5Tab5 board entry). Do not use GPIO 14-19 (SDIO link to the on-board ESP32-C6). `SERIAL_TX_CAN_BLOCK` is 1 only with USB CDC on boot (`-DARDUINO_USB_CDC_ON_BOOT=1` in PlatformIO `build_flags`, "USB CDC On Boot: Enabled" in the Arduino IDE).
 - Uno R4: `FAN_PWM_PIN` 9, core default PWM frequency (`FAN_PWM_FREQUENCY_HZ` 0). The I2C pins are fixed (`Wire` = SDA/SCL header, `Wire1` = Qwiic on the WiFi). `I2C_SDA_PIN`/`I2C_SCL_PIN` must stay -1 (`#error` otherwise). `SERIAL_TX_CAN_BLOCK` is 1 on the Minima (native USB), 0 on the WiFi.
 - `STATUS_LED_PIN` is `LED_BUILTIN` if the core variant defines it, else -1.
 

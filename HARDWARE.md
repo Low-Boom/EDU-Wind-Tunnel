@@ -93,7 +93,7 @@ Change them there only if your wiring is different.
 
 | Function | Pin | Notes |
 |---|---|---|
-| Fan PWM | GPIO 6 | `FAN_PWM_PIN`. 25 kHz, 3.3 V logic. |
+| Fan PWM | GPIO 4 | `FAN_PWM_PIN`. 25 kHz, 3.3 V logic. |
 | I2C SDA | GPIO 7 (default) | `I2C_SDA_PIN` = -1 uses the default pin of the board that you select in the IDE. **ESP32P4 Dev Module**: GPIO 7 (also for the Waveshare boards). |
 | I2C SCL | GPIO 8 (default) | `I2C_SCL_PIN` = -1. **ESP32P4 Dev Module**: GPIO 8 (also for the Waveshare boards). |
 | Fan tachometer | Not used | You can leave the tach wire unconnected. |
@@ -101,14 +101,14 @@ Change them there only if your wiring is different.
 
 CAUTION: Do not use GPIO 14-19. On boards with an ESP32-C6 WiFi chip (for example the Waveshare boards), these pins carry the SDIO link to that chip.
 
-NOTE: If GPIO 6 is not available on your board, change `FAN_PWM_PIN`. Use a GPIO of 36 or lower. Some boards supply the higher GPIOs from a separate (LDO) supply.
+NOTE: If GPIO 4 is not available on your board, change `FAN_PWM_PIN`. Use a GPIO of 36 or lower. Some boards supply the higher GPIOs from a separate (LDO) supply.
 
 The firmware uses only the `Wire` I2C bus on the ESP32-P4.
 At start-up it prints the pins that it uses, for example `[INIT] I2C bus... OK (SDA 7, SCL 8, 100 kHz)`.
 
 There are no wiring images for the ESP32-P4. Use the Uno R4 images below with these changes:
 
-- Connect the fan PWM to GPIO 6, not D9.
+- Connect the fan PWM to GPIO 4, not D9.
 - Connect the sensors to the I2C pins in the table above.
 - Use a level shifter for all fans. See [Level shifter](#level-shifter).
 
@@ -198,7 +198,7 @@ PC fans use the 5 V PWM standard (see the Noctua white paper above).
 Connect the fan PWM wire as the [Level shifter](#level-shifter) table shows:
 
 - Uno R4: connect D9 directly to the fan PWM wire.
-- ESP32-P4: connect GPIO 6 through the level shifter.
+- ESP32-P4: connect GPIO 4 through the level shifter.
 
 The image shows an Uno R4 WiFi with a 12 V PC fan. It also shows older sensors; see [I2C sensor wiring](#i2c-sensor-wiring).
 
