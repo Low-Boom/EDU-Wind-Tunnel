@@ -71,7 +71,7 @@ The versions are pinned in `platformio.ini` (`lib_deps`) and in `.github/workflo
    4. Control, only if the mode did not change in this pass: `MODE_PID` -> `runPidControl()` + `checkAirflow(fanPwm >= NO_AIRFLOW_PWM, "full fan power")`; `MODE_RELAY_TUNE` -> `runRelayTune()`.
    5. `printDataLine()` and `warnIfSlowPass()`.
 
-Main state: `targetAirspeed` (setpoint), `currentAirspeed` (input), `pidOutput` (PID output, also written by the tuners), `fanPwm` (PWM last written, -1 = never), `kp`/`ki`/`kd`, `controlMode` (`MODE_PID`, `MODE_RELAY_TUNE`, `MODE_STUNE`), `pressureAverageSamples`, `pressureOffset`, `invalidPressureReads`, `airDensity`, `airTemperatureC`, `noAirflowDrivenMs`, `myPID` (QuickPID), `sTuner` (`STunePIDTuner *`).
+Main state: `targetAirspeed` (setpoint), `currentAirspeed` (input), `pidOutput` (PID output, also written by the tuners), `fanPwm` (PWM last written, -1 = never), `kp`/`ki`/`kd`, `controlMode` (`MODE_PID`, `MODE_RELAY_TUNE`, `MODE_STUNE`), `pressureAverageSamples`, `pressureOffset`, `rawCodeBuffer`/`zeroRawCode`/`showRawCounts` (raw output only, never used for control), `invalidPressureReads`, `airDensity`, `airTemperatureC`, `noAirflowDrivenMs`, `myPID` (QuickPID), `sTuner` (`STunePIDTuner *`).
 
 Key functions: `setFanPwm()`, `setFanPwmRateLimited()`, `stopFan()`, `stopAll(reason)`, `pidBumplessStart()`, `applyGains()`, `clampGain()`, `startRelayTune()`, `completeRelayTune()`, `startSTune()`, `abortTuning(reason)`, `finishTuning()`, `calibratePressureSensor()`, `setPressureAverageSamples()`, `setTargetAirspeed()`, `setManualGains()`, `maxAirspeed()`, `printHelp()`, `haltWithError()`. In the helpers: `scanAllI2CBuses()`, `getDeviceBus()`, `probeDeviceBus()`; `STunePIDTuner::startTuning()`, `update()`, `getTunedGains()`, `printReport()`, `reset()`.
 
@@ -96,8 +96,8 @@ Settings are `const` values in the "Settings" section at the top of the `.ino` (
 
 - One command per line, LF, CR or CR+LF. Until the first CR or LF since reset, a line also ends after `SERIAL_LINE_TIMEOUT_MS` (1000 ms) without a new character (`lineEndingSeen`).
 - Max 63 characters (`SERIAL_LINE_SIZE` 64), max 4 words (`MAX_COMMAND_WORDS`). Keywords are case-insensitive (`wordIs()`).
-- Commands: `<m/s>`, `0`/`stop`, `tune`, `tune <low> <high>`, `tune <Kp> <Ki> <Kd>`, `stune`, `recal [N]`, `avg <N>`, `help`.
-- Data line: `<t>s | V:<m/s> | SP:<m/s> | PWM:<0-255> | P:<Pa> | Temp:<C> | Err:<m/s>`, with ` | Kp:.. Ki:.. Kd:.. Avg:N` every 20th line in PID mode and ` | Skipped:<n>` after skipped lines. Users log and parse this format: change it only on purpose and update the README.
+- Commands: `<m/s>`, `0`/`stop`, `tune`, `tune <low> <high>`, `tune <Kp> <Ki> <Kd>`, `stune`, `recal [N]`, `avg <N>`, `raw`, `help`.
+- Data line: `<t>s | V:<m/s> | SP:<m/s> | PWM:<0-255> | P:<Pa> | Temp:<C> | Err:<m/s>`, with ` | Raw:<code> Word:0x<hex> St:0x<hex>` after the `raw` command (`showRawCounts`), ` | Kp:.. Ki:.. Kd:.. Avg:N` every 20th line in PID mode and ` | Skipped:<n>` after skipped lines. `DATA_LINE_MAX_LENGTH` (192) must cover the longest line (174 characters) and stay below 256. Users log and parse this format: change it only on purpose and update the README.
 - Message tags: `[INIT]`, `[I2C]`, `[CALIB]`, `[READY]`, `[SERIAL]`, `[CONFIG]`, `[PID]`, `[STOP]`, `[TUNE]`, `[RELAY]`, `[sTune]`, `[BUSY]`, `[WARN]`, `[ERROR]`, `[FATAL]`. Serial output is ASCII only.
 
 ## How to check a build

@@ -22,6 +22,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <math.h>
+#include <stdio.h>              // snprintf (raw output)
 #include <QuickPID.h>
 #include <DFRobot_LWLP.h>
 #include "DFRobot_BMP58X.h"
@@ -138,6 +139,10 @@ const float SENSOR_USABLE_FRACTION = 0.95;
 // only above +600 Pa, far outside its rating. Either way the reading is
 // invalid.
 const uint16_t LWLP_INVALID_CODE = 0x3FFF;
+// The library maps the 14-bit code (0-16383) linearly to -MIN_PRESURE ..
+// +MAX_PRESURE Pa (its header: -600..+600). The raw command shows this
+// scale, so a reference pressure can be checked against the counts.
+const float LWLP_CODE_RANGE = 16384.0;
 
 // Safety checks (each stops the fan and sets the target to 0)
 const int MAX_INVALID_PRESSURE_READS = 5;            // in a row: 1 s without valid data
@@ -155,11 +160,12 @@ const unsigned long SERIAL_LINE_TIMEOUT_MS = 1000;
 // Serial output (see SerialOut.h). Routine lines are printed only if they
 // fit completely into the transmit buffer and are skipped otherwise (see
 // serialHasRoom()), so they need a known maximum length.
-// Longest data line with all suffixes and CR LF: 138 characters (7-digit
-// uptime, |P| < 2400 Pa, V < 102 m/s, Temp -100.0, the largest gains,
-// Avg:50, 10-digit Skipped count). The limit must stay below the smallest
-// USB transmit buffer (256 bytes), or no data line would ever be printed.
-const int DATA_LINE_MAX_LENGTH = 160;
+// Longest data line with all suffixes and CR LF: 174 characters (7-digit
+// uptime, |P| < 2400 Pa, V < 102 m/s, Temp -100.0, the raw fields, the
+// largest gains, Avg:50, 10-digit Skipped count). The limit must stay below
+// the smallest USB transmit buffer (256 bytes), or no data line would ever
+// be printed.
+const int DATA_LINE_MAX_LENGTH = 192;
 const int STATUS_LINE_MAX_LENGTH = 64;   // longest relay switch or cycle line
 const unsigned long SLOW_PASS_WARNING_INTERVAL_MS = 10000;   // at most one per 10 s
 
@@ -172,10 +178,17 @@ DFRobot_LWLP *lwlp = nullptr;            // differential pressure, created once 
 DFRobot_BMP58X_I2C *barometer = nullptr; // created once its address is known
 float pressureOffset = 0.0;              // Pa, zero error found by calibration
 float pressureBuffer[MAX_AVG_SAMPLES];   // moving-average ring buffer
+float rawCodeBuffer[MAX_AVG_SAMPLES];    // 14-bit codes of the same samples (raw output)
 int pressureAverageSamples = DEFAULT_AVG_SAMPLES;
 int pressureBufferIndex = 0;
 bool pressureBufferFilled = false;
 int invalidPressureReads = 0;            // invalid readings in a row
+// Raw output (command: raw). The last reading is kept even if it is invalid,
+// because that is what troubleshooting needs to see.
+bool showRawCounts = false;              // add the raw fields to the data line
+float zeroRawCode = -1.0;                // mean code at the last calibration, -1 = none yet
+uint32_t lastPressureWord = 0;           // 24-bit pressure word of the last reading
+uint8_t lastPressureStatus = 0;          // status byte of the last reading
 float airDensity = SEA_LEVEL_AIR_DENSITY;
 float airTemperatureC = 15.0;
 
@@ -229,11 +242,13 @@ bool lineEndingSeen = false;             // a CR or LF has arrived: no idle time
 // Sensors
 void initPressureSensor();
 void initBarometer();
-bool readPressureRaw(float &pressurePa);
-bool readPressureCorrected(float &pressurePa);
+bool readPressureRaw(float &pressurePa, uint16_t &rawCode);
+bool readPressureCorrected(float &pressurePa, float &rawCode);
 float readPressureAveraged();
+float movingAverage(const float *buffer);
 void resetPressureAverage();
 void setPressureAverageSamples(int samples);
+void toggleRawCounts();
 void calibratePressureSensor(int numSamples);
 float readAirDensity();
 float calcAirspeed(float pressurePa, float density);
@@ -485,43 +500,56 @@ void initBarometer() {
     SerialOut.print(" C, air density: "); SerialOut.print(airDensity, 3); SerialOut.println(" kg/m3");
 }
 
-// One raw sensor reading in Pa; returns false if it is invalid (see
-// LWLP_INVALID_CODE). The LWLP library already subtracts the reading it took
-// at power-on; calibration removes what is left of the zero error. Blocks
-// for about 60 ms (the library waits for the conversion).
-bool readPressureRaw(float &pressurePa) {
+// One raw sensor reading in Pa and the 14-bit code it comes from; returns
+// false if it is invalid (see LWLP_INVALID_CODE). The LWLP library already
+// subtracts the reading it took at power-on; calibration removes what is
+// left of the zero error. The library uses only the code (bits 23-10 of the
+// 24-bit pressure word) and ignores the status byte; both are kept for the
+// raw output. Blocks for about 60 ms (the library waits for the conversion).
+bool readPressureRaw(float &pressurePa, uint16_t &rawCode) {
     DFRobot_LWLP::sLwlp_t reading = lwlp->getData();
     pressurePa = reading.presure;        // "presure" is the library's spelling
+    rawCode = reading.presureData;
+    lastPressureWord = ((uint32_t)reading.presureDataH << 16) |
+                       ((uint32_t)reading.presureDataM << 8) | reading.presureDataL;
+    lastPressureStatus = reading.status;
     return reading.presureData != LWLP_INVALID_CODE;
 }
 
-// Oversampled reading minus the calibration offset; false if no reading was
-// valid. Kept signed on purpose: at zero airspeed the noise swings both
-// ways, and clamping negative values here would bias the moving average
-// (and the airspeed) upward.
-bool readPressureCorrected(float &pressurePa) {
+// Oversampled reading minus the calibration offset, and the mean code of the
+// same readings; false if no reading was valid. Kept signed on purpose: at
+// zero airspeed the noise swings both ways, and clamping negative values here
+// would bias the moving average (and the airspeed) upward.
+bool readPressureCorrected(float &pressurePa, float &rawCode) {
     float sum = 0.0;
+    float codeSum = 0.0;
     int valid = 0;
     for (int i = 0; i < PRESSURE_OVERSAMPLES; i++) {
         float reading;
-        if (readPressureRaw(reading)) {
+        uint16_t code;
+        if (readPressureRaw(reading, code)) {
             sum += reading;
+            codeSum += code;
             valid++;
         }
     }
     if (valid == 0) return false;
     pressurePa = sum / valid - pressureOffset;
+    rawCode = codeSum / valid;
     return true;
 }
 
 // Moving average over the last pressureAverageSamples valid readings. An
 // invalid reading is left out and counted; checkPressureSensor() acts on a
-// run of them.
+// run of them. The codes go into a parallel buffer, so the raw output
+// averages exactly the samples that P averages.
 float readPressureAveraged() {
     float reading;
-    if (readPressureCorrected(reading)) {
+    float code;
+    if (readPressureCorrected(reading, code)) {
         invalidPressureReads = 0;
         pressureBuffer[pressureBufferIndex] = reading;
+        rawCodeBuffer[pressureBufferIndex] = code;
         pressureBufferIndex++;
         if (pressureBufferIndex >= pressureAverageSamples) {
             pressureBufferIndex = 0;
@@ -530,12 +558,17 @@ float readPressureAveraged() {
     } else {
         invalidPressureReads++;
     }
+    return movingAverage(pressureBuffer);
+}
 
+// Mean of the samples in a moving-average buffer (pressureBuffer or
+// rawCodeBuffer); 0 if there is no valid reading since the last reset.
+float movingAverage(const float *buffer) {
     int count = pressureBufferFilled ? pressureAverageSamples : pressureBufferIndex;
-    if (count == 0) return 0.0;          // no valid reading since the last reset
+    if (count == 0) return 0.0;
     float sum = 0.0;
     for (int i = 0; i < count; i++) {
-        sum += pressureBuffer[i];
+        sum += buffer[i];
     }
     return sum / count;
 }
@@ -566,6 +599,28 @@ void setPressureAverageSamples(int samples) {
     }
 }
 
+// raw: add the sensor's own numbers to every data line, to check the
+// conversion to Pa against a reference pressure (for example a water
+// manometer). The library scale and the zero code are shown here once, so
+// counts per Pa = (Raw - zero code) / reference Pa can be compared with it.
+void toggleRawCounts() {
+    showRawCounts = !showRawCounts;
+    SerialOut.print("[CONFIG] Raw sensor counts in the data line: ");
+    SerialOut.println(showRawCounts ? "on" : "off");
+    if (!showRawCounts) return;
+    SerialOut.println("         Raw: mean 14-bit code (0-16383) of the samples in P");
+    SerialOut.println("         Word: 24-bit pressure word, St: status byte (last reading)");
+    SerialOut.print  ("         Library scale: code 0-16383 = "); SerialOut.print(-MIN_PRESURE);
+    SerialOut.print(" to +"); SerialOut.print(MAX_PRESURE); SerialOut.print(" Pa (");
+    SerialOut.print(LWLP_CODE_RANGE / (MAX_PRESURE + MIN_PRESURE), 3); SerialOut.println(" counts per Pa)");
+    SerialOut.print  ("         Zero code (last calibration): ");
+    if (zeroRawCode >= 0) {
+        SerialOut.println(zeroRawCode, 1);
+    } else {
+        SerialOut.println("none - type recal");
+    }
+}
+
 // Zero the differential pressure sensor: the mean of numSamples raw readings
 // taken in still air becomes the offset. The fan is always stopped first,
 // because any airflow during calibration would be stored as "zero" and make
@@ -590,13 +645,16 @@ void calibratePressureSensor(int numSamples) {
     SerialOut.print("        Taking "); SerialOut.print(numSamples); SerialOut.print(" samples: ");
     double sum = 0.0;
     double sumSquares = 0.0;
+    double codeSum = 0.0;
     float minVal = 0.0;
     float maxVal = 0.0;
     int valid = 0;
     for (int i = 0; i < numSamples; i++) {
         float reading;
-        if (readPressureRaw(reading)) {  // invalid readings are skipped ("x")
+        uint16_t code;
+        if (readPressureRaw(reading, code)) {   // invalid readings are skipped ("x")
             sum += reading;
+            codeSum += code;
             sumSquares += (double)reading * reading;
             if (valid == 0 || reading < minVal) minVal = reading;
             if (valid == 0 || reading > maxVal) maxVal = reading;
@@ -624,6 +682,7 @@ void calibratePressureSensor(int numSamples) {
     float variance = sumSquares / valid - (double)mean * mean;
     if (variance < 0) variance = 0;      // rounding can give tiny negatives
     pressureOffset = mean;
+    zeroRawCode = codeSum / valid;       // the code of 0 Pa, for the raw output
     resetPressureAverage();              // old samples used the old offset
 
     SerialOut.println("\n        Calibration Results:");
@@ -634,6 +693,7 @@ void calibratePressureSensor(int numSamples) {
     SerialOut.print("        Max reading: "); SerialOut.print(maxVal, 4); SerialOut.println(" Pa");
     SerialOut.print("        Offset (mean): "); SerialOut.print(pressureOffset, 4); SerialOut.println(" Pa");
     SerialOut.print("        Noise (std dev): "); SerialOut.print(sqrt(variance), 4); SerialOut.println(" Pa");
+    SerialOut.print("        Zero code (mean): "); SerialOut.print(zeroRawCode, 1); SerialOut.println(" counts");
     SerialOut.println("=====================================\n");
 }
 
@@ -1205,6 +1265,8 @@ void handleCommand(char *line) {
             SerialOut.print(MIN_AVG_SAMPLES); SerialOut.print(" and ");
             SerialOut.println(MAX_AVG_SAMPLES);
         }
+    } else if (wordIs(cmd, "raw") && count == 1) {
+        toggleRawCounts();
     } else if (isNumber && count == 1) {
         setTargetAirspeed(number);
     } else {
@@ -1331,6 +1393,7 @@ void printHelp() {
     SerialOut.print  ("  avg <N>              Pressure moving-average length (");
     SerialOut.print(MIN_AVG_SAMPLES); SerialOut.print("-"); SerialOut.print(MAX_AVG_SAMPLES);
     SerialOut.println(")");
+    SerialOut.println("  raw                  Raw sensor counts in the data line on/off");
     SerialOut.println("  help                 Show this list");
     SerialOut.print  ("Auto-tunes need a target of at least "); SerialOut.print(MIN_TUNE_SETPOINT, 1);
     SerialOut.println(" m/s. During a tune only 0 or stop is accepted.");
@@ -1362,6 +1425,16 @@ void printDataLine(unsigned long now, float pressure) {
     SerialOut.print(" | P:"); SerialOut.print(pressure, 2);
     SerialOut.print(" | Temp:"); SerialOut.print(airTemperatureC, 1);
     SerialOut.print(" | Err:"); SerialOut.print(targetAirspeed - currentAirspeed, 2);
+
+    // raw command: the mean code of the samples in P, then the 24-bit word
+    // and the status byte of the last reading (zero-padded hex)
+    if (showRawCounts) {
+        char hex[32];                    // 22 characters; room for any 32-bit value
+        snprintf(hex, sizeof(hex), " Word:0x%06lX St:0x%02X",
+                 (unsigned long)lastPressureWord, (unsigned)lastPressureStatus);
+        SerialOut.print(" | Raw:"); SerialOut.print(movingAverage(rawCodeBuffer), 1);
+        SerialOut.print(hex);
+    }
 
     // Every 20th line in PID mode: the active gains and averaging length
     if (dataLineCount % 20 == 0 && controlMode == MODE_PID) {
