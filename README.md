@@ -171,6 +171,7 @@ Type one command on a line. Then send the line (press Enter).
 | `stune` | sTune step-response auto-tune. | Set a target airspeed of at least 2.0 m/s first. |
 | `recal` or `recal <N>` | Stops the fan, waits 15 s, and takes `<N>` samples for a new zero offset. The target airspeed stays 0. | `<N>` = 5-100, default 50. The firmware reads no commands during `recal`. |
 | `avg <N>` | Sets the length of the moving average of the pressure. | 1-50, default 5. A longer average adds delay to the control loop. |
+| `raw` | Adds the raw counts of the differential pressure sensor to each data line, or removes them. | Off at start-up. When you set it on, the firmware also shows the library scale and the zero code. See [Check the pressure sensor](#check-the-pressure-sensor). |
 | `help` | Shows the command list. | |
 
 Rules:
@@ -213,6 +214,7 @@ Example (simulation, target airspeed 10 m/s):
 
 Additional parts at the end of a data line:
 
+- ` | Raw:<code> Word:0x<hex> St:0x<hex>`: only after the `raw` command. `Raw` is the mean 14-bit code (0-16383) of the same samples as `P`. `Word` is the 24-bit pressure word and `St` is the status byte of the last reading, also if that reading was not valid.
 - ` | Kp:<Kp> Ki:<Ki> Kd:<Kd> Avg:<N>`: the present gains and averaging length. Every 20th line in PID mode (no auto-tune running), thus every 4 s.
 - ` | Skipped:<n>`: the number of data lines that the firmware did not show, because the computer did not read the serial port. This occurs only on a native USB port: the Uno R4 Minima, and the ESP32-P4 with USB CDC on boot (PlatformIO: `-DARDUINO_USB_CDC_ON_BOOT=1` in `build_flags`; Arduino IDE: **Tools > USB CDC On Boot: Enabled**).
 
@@ -265,6 +267,20 @@ To change a default, edit the constant, then upload again. The `.ino` constants 
 | The airspeed oscillates around the target | The gains are too high for your fan. | Run `tune` or `stune`, or set lower gains. See [TUNING_GUIDE.md](TUNING_GUIDE.md#troubleshooting-by-symptom). |
 | `[TUNE] Tuning aborted (relay tune timeout) - ...` | The two PWM levels do not give airspeeds above and below the target. | Give the PWM levels, for example `tune 40 100`. See [TUNING_GUIDE.md](TUNING_GUIDE.md#relay-auto-tune-tune). |
 | Commands have no effect | Incorrect speed, or (Arduino IDE) a change to **No Line Ending** after a line ending | Set 115200 baud. Reset the board. |
+| `P` does not agree with a reference pressure (for example a water manometer) | Incorrect scale of the sensor or of the conversion to Pa | Compare the raw counts with the reference. See [Check the pressure sensor](#check-the-pressure-sensor). |
+
+### Check the pressure sensor
+
+Use this procedure to compare the differential pressure sensor with a reference, for example a water manometer. 1 mmH2O = 9.80665 Pa.
+
+1. Connect both sensor ports and the manometer to the room air. Type `recal`. Write down the `Zero code (mean)` value.
+2. Type `raw`. The firmware shows the library scale, for example `Library scale: code 0-16383 = -600 to +600 Pa (13.653 counts per Pa)`.
+3. Apply a reference pressure to the high-pressure port and to the manometer at the same time.
+4. Wait until `Raw` is stable. Write down `Raw` and the manometer value in Pa.
+5. Calculate the sensor scale: (`Raw` - zero code) / reference pressure, in counts per Pa.
+6. Do steps 3 to 5 again at different pressures.
+
+If the sensor scale is not the same as the library scale, `P` and the airspeed are not correct. The firmware does not change the counts: `P` is always (`Raw` - zero code) / library scale.
 
 ## Known Issues
 
